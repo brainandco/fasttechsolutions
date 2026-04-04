@@ -54,9 +54,11 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 # Admin portal public URL (for emails and links)
 NEXT_PUBLIC_APP_URL=https://admin.fts-ksa.com
 
-# Resend (credentials emails) — FROM must match a verified domain in Resend (e.g. noreply@admin.fts-ksa.com if you verified admin.fts-ksa.com, not @fts-ksa.com unless the root domain is verified)
+# Resend (invitation + credentials emails) — FROM must match a verified domain in Resend
 RESEND_API_KEY=your_resend_api_key
 RESEND_FROM_EMAIL=noreply@admin.fts-ksa.com
+# Canonical portal URL in the post-accept credentials email (default https://admin.fts-ksa.com)
+ADMIN_PORTAL_PUBLIC_URL=https://admin.fts-ksa.com
 
 # So "Add user" and "Add employee" emails link to the correct portals
 EMPLOYEE_PORTAL_URL=https://employee.fts-ksa.com

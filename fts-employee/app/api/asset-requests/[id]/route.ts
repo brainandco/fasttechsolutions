@@ -1,6 +1,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getDataClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { targetEmployeeIsInPmAssignmentScope } from "@/lib/pm-team-assignees";
 
 /**
  * PATCH: PM fulfills or rejects a QC replacement request.
@@ -26,7 +27,7 @@ export async function PATCH(
   const email = (session.user.email ?? "").trim();
   const { data: pmEmployee } = await supabase
     .from("employees")
-    .select("id, region_id")
+    .select("id, region_id, project_id")
     .eq("email", email)
     .maybeSingle();
   if (!pmEmployee) return NextResponse.json({ message: "Employee not found" }, { status: 403 });
@@ -49,13 +50,21 @@ export async function PATCH(
     return NextResponse.json({ message: "Request already resolved" }, { status: 400 });
   }
 
-  const { data: forEmp } = await supabase
-    .from("employees")
-    .select("region_id")
-    .eq("id", requestRow.for_employee_id)
-    .single();
-  if (forEmp?.region_id !== pmEmployee.region_id) {
-    return NextResponse.json({ message: "Request is not for your region" }, { status: 403 });
+  const inScope = await targetEmployeeIsInPmAssignmentScope(
+    supabase,
+    pmEmployee,
+    requestRow.for_employee_id,
+    session.user.id,
+    { excludeQc: false, requireVehicleRoles: false }
+  );
+  if (!inScope) {
+    return NextResponse.json(
+      {
+        message:
+          "This request is not for someone in your scope (team DT/Driver-Rigger, or an employee in one of your regions).",
+      },
+      { status: 403 }
+    );
   }
 
   const now = new Date().toISOString();

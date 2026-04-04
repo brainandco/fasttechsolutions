@@ -1,9 +1,10 @@
 import { getDataClient } from "@/lib/supabase/server";
-import { can } from "@/lib/rbac/permissions";
+import { can, getCurrentUserProfile } from "@/lib/rbac/permissions";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { DataTable } from "@/components/ui/DataTable";
 import { EmployeeImport } from "@/components/employees/EmployeeImport";
+import { formatEmployeeRoleDisplay } from "@/lib/employees/employee-role-options";
+import { EmployeesDirectoryTable } from "@/components/employees/EmployeesDirectoryTable";
 
 function StatCard({
   label,
@@ -34,6 +35,7 @@ function StatCard({
 export default async function EmployeesPage() {
   if (!(await can("users.view"))) redirect("/dashboard");
 
+  const { profile } = await getCurrentUserProfile();
   const supabase = await getDataClient();
   const { data: employees } = await supabase
     .from("employees")
@@ -41,11 +43,14 @@ export default async function EmployeesPage() {
     .order("created_at", { ascending: false });
 
   const empIds = (employees ?? []).map((e) => e.id);
-  const { data: roleRows } = await supabase.from("employee_roles").select("employee_id, role").in("employee_id", empIds);
+  const { data: roleRows } = await supabase
+    .from("employee_roles")
+    .select("employee_id, role, role_custom")
+    .in("employee_id", empIds);
   const rolesByEmpId = new Map<string, string[]>();
   for (const r of roleRows ?? []) {
     const arr = rolesByEmpId.get(r.employee_id) ?? [];
-    arr.push(r.role);
+    arr.push(formatEmployeeRoleDisplay(r.role, r.role_custom));
     rolesByEmpId.set(r.employee_id, arr);
   }
 
@@ -107,27 +112,7 @@ export default async function EmployeesPage() {
             {totalEmployees} records
           </span>
         </div>
-        <DataTable
-          keyField="id"
-          data={rows}
-          hrefPrefix="/employees/"
-          filterKeys={["status", "region_name"]}
-          searchPlaceholder="Search employees…"
-          columns={[
-          { key: "full_name", label: "Full name" },
-          { key: "passport_number", label: "Passport", format: "text" },
-          { key: "country", label: "Country" },
-          { key: "email", label: "Email", format: "text" },
-          { key: "phone", label: "Phone", format: "text" },
-          { key: "iqama_number", label: "Iqama", format: "text" },
-          { key: "roles_display", label: "Roles" },
-          { key: "region_name", label: "Region" },
-          { key: "project_name", label: "Project" },
-          { key: "assigned_vehicles_display", label: "Assigned vehicles" },
-          { key: "onboarding_date", label: "Onboarding" },
-          { key: "status", label: "Status" },
-        ]}
-        />
+        <EmployeesDirectoryTable data={rows} canDelete={profile?.is_super_user === true} />
       </div>
     </div>
   );

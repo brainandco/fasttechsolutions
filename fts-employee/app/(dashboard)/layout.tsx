@@ -41,17 +41,36 @@ export default async function DashboardLayout({
   let isPm = false;
   let isQc = false;
   let isPp = false;
+  let isProjectCoordinator = false;
+  let showTransferRequestsNav = false;
   if (employee) {
     const { data: roles } = await dataClient.from("employee_roles").select("role").eq("employee_id", employee.id);
     const roleSet = new Set((roles ?? []).map((r) => r.role));
     isPm = roleSet.has("Project Manager");
     isQc = roleSet.has("QC");
     isPp = roleSet.has("PP");
+    isProjectCoordinator = roleSet.has("Project Coordinator");
+    showTransferRequestsNav =
+      isPm ||
+      isQc ||
+      roleSet.has("DT") ||
+      roleSet.has("Driver/Rigger") ||
+      roleSet.has("Self DT");
   }
 
   const displayName = employee?.full_name ?? userProfile?.full_name ?? email;
   const avatarUrl = employee?.avatar_url ?? userProfile?.avatar_url ?? null;
-  const roleBadge = isAdminView ? "Admin" : isPm ? "PM" : isQc ? "QC" : isPp ? "Post Processor" : "Team";
+  const roleBadge = isAdminView
+    ? "Admin"
+    : isPm
+      ? "PM"
+      : isQc
+        ? "QC"
+        : isPp
+          ? "Post Processor"
+          : isProjectCoordinator
+            ? "PC"
+            : "Team";
   const { count: unreadNotifications } = session?.user?.id
     ? await dataClient
         .from("notifications")
@@ -59,6 +78,16 @@ export default async function DashboardLayout({
         .eq("recipient_user_id", session.user.id)
         .eq("is_read", false)
     : { count: 0 };
+
+  let pendingReceiptCount = 0;
+  if (employee && !isAdminView) {
+    const { count } = await dataClient
+      .from("resource_receipt_confirmations")
+      .select("id", { count: "exact", head: true })
+      .eq("employee_id", employee.id)
+      .eq("status", "pending");
+    pendingReceiptCount = count ?? 0;
+  }
 
   let navSections: EmployeeNavSection[] = [];
   if (isAdminView) {
@@ -73,7 +102,18 @@ export default async function DashboardLayout({
       },
     ];
   } else {
-    navSections = [{ label: "Overview", items: [{ href: "/dashboard", label: "Dashboard" }] }];
+    navSections = [
+      {
+        label: "Overview",
+        items: [
+          { href: "/dashboard", label: "Dashboard" },
+          {
+            href: "/dashboard/receipts",
+            label: pendingReceiptCount > 0 ? `Confirm receipt (${pendingReceiptCount})` : "Confirm receipt",
+          },
+        ],
+      },
+    ];
     if (isPm) {
       navSections.push({
         label: "Project manager",
@@ -109,15 +149,19 @@ export default async function DashboardLayout({
         ],
       });
     }
+    const workspaceItems: { href: string; label: string }[] = [];
+    if (showTransferRequestsNav) {
+      workspaceItems.push({ href: "/dashboard/transfer-requests", label: "Transfer requests" });
+    }
+    workspaceItems.push(
+      { href: "/tasks", label: "My tasks" },
+      { href: "/dashboard/notifications", label: "Notifications" },
+      { href: "/leave", label: "Leave" },
+      { href: "/settings/profile", label: "Profile settings" }
+    );
     navSections.push({
       label: "Workspace",
-      items: [
-        { href: "/dashboard/transfer-requests", label: "Transfer requests" },
-        { href: "/tasks", label: "My tasks" },
-        { href: "/dashboard/notifications", label: "Notifications" },
-        { href: "/leave", label: "Leave" },
-        { href: "/settings/profile", label: "Profile settings" },
-      ],
+      items: workspaceItems,
     });
   }
 

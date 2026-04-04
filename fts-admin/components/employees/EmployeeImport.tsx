@@ -11,8 +11,6 @@ export type ImportPreviewRow = {
   phone: string;
   iqama_number: string;
   roles_display: string;
-  region_name: string;
-  project_name: string;
   onboarding_date: string | null;
   status: string;
   _payload: {
@@ -23,9 +21,10 @@ export type ImportPreviewRow = {
     phone: string;
     iqama_number: string;
     roles: string[];
-    region_id: string | null;
-    project_id: string | null;
-    project_name_other: string | null;
+    role_custom: string | null;
+    region_id: null;
+    project_id: null;
+    project_name_other: null;
     onboarding_date: string | null;
     status: string;
   };
@@ -42,8 +41,6 @@ const PREVIEW_COLUMNS: { key: PreviewColumnKey; label: string }[] = [
   { key: "phone", label: "Phone" },
   { key: "iqama_number", label: "Iqama" },
   { key: "roles_display", label: "Roles" },
-  { key: "region_name", label: "Region" },
-  { key: "project_name", label: "Project" },
   { key: "onboarding_date", label: "Onboarding" },
   { key: "status", label: "Status" },
 ];
@@ -139,7 +136,14 @@ export function EmployeeImport() {
             </div>
             <div className="overflow-y-auto max-h-[calc(90vh-8rem)] px-6 py-4 space-y-4">
               <p className="text-sm text-zinc-600">
-                Upload a CSV with columns: full_name, passport_number, country, email, phone, iqama_number, roles, region, project (or OTHER), project_name_other (if OTHER), onboarding_date, status. Use semicolons in roles e.g. <code className="rounded bg-zinc-100 px-1">DT;Driver/Rigger</code> or a single role such as <code className="rounded bg-zinc-100 px-1">QA</code>.
+                Upload a CSV with columns: full_name, passport_number, country, email, phone, iqama_number, roles, and optionally onboarding_date, status. Assign region and project after import on{" "}
+                <span className="font-medium text-zinc-800">Employees → Region &amp; project assignments</span>. In the roles column use one value per row, for example{" "}
+                <code className="rounded bg-zinc-100 px-1">QA</code>, a fixed role like <code className="rounded bg-zinc-100 px-1">DT</code>,{" "}
+                <code className="rounded bg-zinc-100 px-1">Other:Mechanic</code>, or any custom label (stored as a custom role). One role per row.{" "}
+                <span className="text-zinc-500">
+                  Onboarding date: ISO <code className="rounded bg-zinc-100 px-1">YYYY-MM-DD</code> (unchanged), or day-first{" "}
+                  <code className="rounded bg-zinc-100 px-1">DD-MM-YYYY</code>/<code className="rounded bg-zinc-100 px-1">DD/MM/YYYY</code>, year-first with slashes/dots, 2-digit years, and ISO datetimes — all normalized to YYYY-MM-DD.
+                </span>
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <input

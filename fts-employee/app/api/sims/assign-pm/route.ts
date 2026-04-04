@@ -1,14 +1,20 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getDataClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import {
+  targetEmployeeIsOnPmTeam,
+  targetEmployeeIsInPmRegionScope,
+} from "@/lib/pm-team-assignees";
+import { upsertPendingReceipts } from "@/lib/resource-receipts";
 
-/** PM assigns available SIM cards to an employee in same region (non-QC). */
+/** PM assigns available SIM cards to a DT or Driver/Rigger on a team in scope (team region/project; projects where user is PM). */
 export async function POST(req: Request) {
   const userClient = await createServerSupabaseClient();
   const { data: { session } } = await userClient.auth.getSession();
   if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
+  const assignmentMode = body.assignment_mode === "region" ? "region" : "team";
   const simIds = Array.isArray(body.sim_ids) ? body.sim_ids.filter((id: unknown) => typeof id === "string") : [];
   const employeeId = typeof body.employee_id === "string" ? body.employee_id.trim() : "";
   if (!employeeId || simIds.length === 0) {
@@ -18,7 +24,7 @@ export async function POST(req: Request) {
   const supabase = await getDataClient();
   const { data: pmEmployee } = await supabase
     .from("employees")
-    .select("id, region_id")
+    .select("id, region_id, project_id")
     .eq("email", session.user.email ?? "")
     .maybeSingle();
   if (!pmEmployee) return NextResponse.json({ message: "Employee not found" }, { status: 403 });
@@ -37,9 +43,6 @@ export async function POST(req: Request) {
     .eq("id", employeeId)
     .single();
   if (!toEmployee) return NextResponse.json({ message: "Target employee not found" }, { status: 404 });
-  if (toEmployee.region_id !== pmEmployee.region_id) {
-    return NextResponse.json({ message: "You can only assign SIMs to employees in your region" }, { status: 400 });
-  }
 
   const { data: qcRole } = await supabase
     .from("employee_roles")
@@ -48,6 +51,25 @@ export async function POST(req: Request) {
     .eq("role", "QC")
     .maybeSingle();
   if (qcRole) return NextResponse.json({ message: "Cannot assign SIMs to QC." }, { status: 400 });
+
+  const inScope =
+    assignmentMode === "team"
+      ? await targetEmployeeIsOnPmTeam(supabase, pmEmployee, employeeId, session.user.id)
+      : await targetEmployeeIsInPmRegionScope(supabase, pmEmployee, employeeId, session.user.id, {
+          excludeQc: true,
+          requireVehicleRoles: false,
+        });
+  if (!inScope) {
+    return NextResponse.json(
+      {
+        message:
+          assignmentMode === "team"
+            ? "Assign only to a DT or Driver/Rigger on a team in your scope (team region/project in Admin, or project PM)."
+            : "Assign only to an active employee in one of your regions. QC cannot receive SIMs.",
+      },
+      { status: 400 }
+    );
+  }
 
   const { data: sims } = await supabase
     .from("sim_cards")
@@ -74,6 +96,14 @@ export async function POST(req: Request) {
     });
   }
 
+  if (availableIds.length > 0) {
+    await upsertPendingReceipts(supabase, {
+      employeeId: employeeId,
+      assignedByUserId: session.user.id,
+      items: availableIds.map((rid) => ({ resourceType: "sim_card" as const, resourceId: rid })),
+    });
+  }
+
   if (availableIds.length > 0 && toEmployee?.email) {
     const { data: recipient } = await supabase
       .from("users_profile")
@@ -83,10 +113,13 @@ export async function POST(req: Request) {
     if (recipient?.id) {
       await supabase.from("notifications").insert({
         recipient_user_id: recipient.id,
-        title: "SIM assigned to you",
-        body: `${availableIds.length} SIM(s) were assigned to you by PM.`,
-        category: "sim_assignment",
-        link: "/dashboard",
+        title: "Confirm receipt: SIM(s) assigned",
+        body:
+          availableIds.length === 1
+            ? "A SIM was assigned to you. Please open Confirm receipt and confirm you received the card."
+            : `${availableIds.length} SIMs were assigned to you. Please open Confirm receipt to confirm.`,
+        category: "assignment_receipt",
+        link: "/dashboard/receipts",
         meta: { sim_ids: availableIds, assigned_by: session.user.id },
       });
     }

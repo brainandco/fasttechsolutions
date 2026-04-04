@@ -1,10 +1,12 @@
 import { getDataClient } from "@/lib/supabase/server";
 import { can, getCurrentUserProfile } from "@/lib/rbac/permissions";
+import { PmScopeSettings } from "@/components/employees/PmScopeSettings";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { EmployeeForm } from "@/components/employees/EmployeeForm";
 import { EntityHistory } from "@/components/audit/EntityHistory";
 import { ResendCredentialsButton } from "@/components/employees/ResendCredentialsButton";
+import { formatEmployeeRoleDisplay } from "@/lib/employees/employee-role-options";
 
 export default async function EmployeeDetailPage({ params }: { params: Promise<{ id: string }> }) {
   if (!(await can("users.edit"))) redirect("/employees");
@@ -14,12 +16,28 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
   const { data: employee } = await supabase.from("employees").select("*").eq("id", id).single();
   if (!employee) notFound();
 
-  const { data: roleRows } = await supabase.from("employee_roles").select("role").eq("employee_id", id);
+  const { data: roleRows } = await supabase.from("employee_roles").select("role, role_custom").eq("employee_id", id);
   const roles = (roleRows ?? []).map((r) => r.role);
-  const employeeWithRoles = { ...employee, roles };
+  const role_custom = (roleRows ?? [])[0]?.role_custom ?? null;
+  const employeeWithRoles = { ...employee, roles, role_custom };
 
   const { profile } = await getCurrentUserProfile();
   const isSuper = profile?.is_super_user ?? false;
+  const canEditUsers = await can("users.edit");
+  const isPm = roles.includes("Project Manager");
+
+  const { data: regionsList } = await supabase.from("regions").select("id, name").order("name");
+  const { data: projectsList } = await supabase.from("projects").select("id, name, region_id").order("name");
+  let extraRegionIds: string[] = [];
+  let pmProjectIds: string[] = [];
+  if (isPm) {
+    const [er, ep] = await Promise.all([
+      supabase.from("pm_region_assignments").select("region_id").eq("employee_id", id),
+      supabase.from("pm_employee_projects").select("project_id").eq("employee_id", id),
+    ]);
+    extraRegionIds = (er.data ?? []).map((r) => r.region_id as string);
+    pmProjectIds = (ep.data ?? []).map((p) => p.project_id as string);
+  }
 
   const [assignmentsRes, assetsRes] = await Promise.all([
     supabase.from("vehicle_assignments").select("vehicle_id").eq("employee_id", id),
@@ -86,12 +104,12 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
             </div>
             {roles.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {roles.map((r) => (
+                {(roleRows ?? []).map((r) => (
                   <span
-                    key={r}
+                    key={`${r.role}-${r.role_custom ?? ""}`}
                     className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-medium text-zinc-600"
                   >
-                    {r}
+                    {formatEmployeeRoleDisplay(r.role, r.role_custom)}
                   </span>
                 ))}
               </div>
@@ -126,9 +144,23 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
           </p>
         </div>
         <div className="p-6">
-          <EmployeeForm existing={employeeWithRoles} />
+          <EmployeeForm existing={employeeWithRoles} canDeleteEmployee={isSuper} />
         </div>
       </div>
+
+      {isPm ? (
+        <PmScopeSettings
+          employeeId={id}
+          isSuper={isSuper}
+          canEditProjects={canEditUsers}
+          isPm={isPm}
+          primaryRegionId={employee.region_id}
+          allRegions={regionsList ?? []}
+          allProjects={projectsList ?? []}
+          extraRegionIds={extraRegionIds}
+          projectIds={pmProjectIds}
+        />
+      ) : null}
 
       {/* Assigned assets card */}
       <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
