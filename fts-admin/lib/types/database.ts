@@ -26,7 +26,8 @@ export type AssetStatus =
   | "Assigned"
   | "Under_Maintenance"
   | "Damaged"
-  | "Pending_Return";
+  | "Pending_Return"
+  | "With_QC";
 export type ProjectType = "MS" | "Rollout" | "Huawei Minor";
 
 export interface Region {
@@ -41,10 +42,17 @@ export interface UsersProfile {
   id: string;
   email: string;
   full_name: string | null;
+  /** Public Supabase Storage URL for profile image. */
+  avatar_url?: string | null;
   status: UserStatus;
   is_super_user: boolean;
   created_at: string;
   updated_at: string;
+  /** Set when Super User invites; cleared after acceptance. Legacy users have null. */
+  invitation_token?: string | null;
+  invitation_sent_at?: string | null;
+  invitation_expires_at?: string | null;
+  invitation_accepted_at?: string | null;
 }
 
 /** Not used (PM is employee role only; region/project on employee). Kept for type compatibility. */
