@@ -3,30 +3,23 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 export type AssetImportPreviewRow = {
-  name: string;
   category: string;
   serial: string;
   model: string;
   asset_id: string;
-  purchase_date: string;
-  warranty_end: string;
   condition: string;
   software_connectivity: string;
   imei_1: string;
   imei_2: string;
   company: string;
   ram: string;
-  specs_json: string;
   _payload: {
-    name: string;
     category: string;
     serial: string | null;
     model: string | null;
     imei_1: string | null;
     imei_2: string | null;
     asset_id: string | null;
-    purchase_date: string | null;
-    warranty_end: string | null;
     condition: string | null;
     software_connectivity: string | null;
     specs: Record<string, unknown>;
@@ -37,20 +30,16 @@ export type AssetImportPreviewRow = {
 type PreviewColumnKey = Exclude<keyof AssetImportPreviewRow, "_payload" | "_error">;
 
 const PREVIEW_COLUMNS: { key: PreviewColumnKey; label: string }[] = [
-  { key: "name", label: "Name" },
+  { key: "company", label: "Company" },
   { key: "category", label: "Type" },
   { key: "serial", label: "Serial" },
   { key: "model", label: "Model" },
   { key: "imei_1", label: "IMEI 1" },
   { key: "imei_2", label: "IMEI 2" },
   { key: "asset_id", label: "Asset ID" },
-  { key: "purchase_date", label: "Purchase" },
-  { key: "warranty_end", label: "Warranty end" },
   { key: "condition", label: "Condition" },
   { key: "software_connectivity", label: "Software" },
-  { key: "company", label: "Company" },
   { key: "ram", label: "RAM" },
-  { key: "specs_json", label: "specs_json" },
 ];
 
 export function AssetImport() {
@@ -155,9 +144,8 @@ export function AssetImport() {
             </div>
             <div className="max-h-[calc(90vh-8rem)] space-y-4 overflow-y-auto px-6 py-4">
               <p className="text-sm text-zinc-600">
-                CSV columns: <strong>name</strong>, <strong>category</strong> (required — any type label). Optional:
-                model, serial, imei_1, imei_2, asset_id, purchase_date, warranty_end, condition, software_connectivity, company, ram, specs_json
-                (JSON object merged into specs).
+                CSV columns: <strong>company</strong>, <strong>category</strong> (required — category is any type label).
+                Optional model, serial, imei_1, imei_2, asset_id, condition, software_connectivity, ram.
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <input

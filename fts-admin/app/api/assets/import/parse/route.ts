@@ -54,13 +54,13 @@ export async function POST(req: Request) {
     return i >= 0 ? (row[i] ?? "").trim() : "";
   };
 
-  const requiredHeaders = ["name", "category"];
+  const requiredHeaders = ["company", "category"];
   const hasRequired = requiredHeaders.every((h) => headers.includes(h));
   if (!hasRequired) {
     return NextResponse.json(
       {
         message:
-          "CSV must include headers: name, category. Optional: model, serial, imei_1, imei_2, asset_id, purchase_date, warranty_end, condition, software_connectivity, company, ram, specs_json. Category is any label you use for grouping (free text).",
+          "CSV must include headers: company, category. Optional: model, serial, imei_1, imei_2, asset_id, condition, software_connectivity, ram. Category is any label you use for grouping (free text).",
         previewRows: [],
       },
       { status: 400 }
@@ -68,30 +68,23 @@ export async function POST(req: Request) {
   }
 
   type PreviewRow = {
-    name: string;
     category: string;
     serial: string;
     model: string;
     asset_id: string;
-    purchase_date: string;
-    warranty_end: string;
     condition: string;
     software_connectivity: string;
     imei_1: string;
     imei_2: string;
     company: string;
     ram: string;
-    specs_json: string;
     _payload: {
-      name: string;
       category: string;
       serial: string | null;
       model: string | null;
       imei_1: string | null;
       imei_2: string | null;
       asset_id: string | null;
-      purchase_date: string | null;
-      warranty_end: string | null;
       condition: string | null;
       software_connectivity: string | null;
       specs: Record<string, unknown>;
@@ -103,72 +96,49 @@ export async function POST(req: Request) {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const name = col(row, "name");
     const categoryRaw = col(row, "category");
     const serial = col(row, "serial");
     const model = col(row, "model");
     const imei_1 = col(row, "imei_1") || col(row, "imei1");
     const imei_2 = col(row, "imei_2") || col(row, "imei2");
     const asset_id = col(row, "asset_id");
-    const purchase_date = col(row, "purchase_date") || null;
-    const warranty_end = col(row, "warranty_end") || null;
     const condition = col(row, "condition");
     const software_connectivity = col(row, "software_connectivity");
     const company = col(row, "company") || col(row, "spec_company");
     const ram = col(row, "ram") || col(row, "spec_ram");
-    const specs_json = col(row, "specs_json");
 
     const categoryTrimmed = categoryRaw.trim();
     const errors: string[] = [];
-    if (!name.trim()) errors.push("Name required");
+    if (!company.trim()) errors.push("Company required");
     if (!categoryTrimmed) errors.push("Category required");
 
     const specs: Record<string, unknown> = {};
-    if (specs_json.trim()) {
-      try {
-        const parsed = JSON.parse(specs_json) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          errors.push("specs_json must be a JSON object");
-        } else {
-          Object.assign(specs, parsed as Record<string, unknown>);
-        }
-      } catch {
-        errors.push("specs_json is not valid JSON");
-      }
-    }
     if (company.trim()) specs.company = company.trim();
     if (ram.trim()) specs.ram = ram.trim();
 
     const _payload = {
-      name: name.trim(),
       category: categoryTrimmed,
       serial: serial.trim() || null,
       model: model.trim() || null,
       imei_1: imei_1.trim() || null,
       imei_2: imei_2.trim() || null,
       asset_id: asset_id.trim() || null,
-      purchase_date,
-      warranty_end,
       condition: condition.trim() || null,
       software_connectivity: software_connectivity.trim() || null,
       specs,
     };
 
     previewRows.push({
-      name: name || "—",
       category: categoryTrimmed || "—",
       serial: serial || "—",
       model: model || "—",
       imei_1: imei_1 || "—",
       imei_2: imei_2 || "—",
       asset_id: asset_id || "—",
-      purchase_date: purchase_date ?? "—",
-      warranty_end: warranty_end ?? "—",
       condition: condition || "—",
       software_connectivity: software_connectivity || "—",
       company: company || "—",
       ram: ram || "—",
-      specs_json: specs_json || "—",
       _payload,
       ...(errors.length ? { _error: errors.join(". ") } : {}),
     });

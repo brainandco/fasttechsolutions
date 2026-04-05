@@ -16,22 +16,22 @@ export async function POST(req: Request) {
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    const name = typeof r.name === "string" ? r.name.trim() : "";
     const categoryRaw = typeof r.category === "string" ? r.category.trim() : "";
     const serial = typeof r.serial === "string" ? r.serial.trim() || null : r.serial ?? null;
     const model = typeof r.model === "string" ? r.model.trim() || null : r.model ?? null;
     const imei_1 = typeof r.imei_1 === "string" ? r.imei_1.trim() || null : r.imei_1 ?? null;
     const imei_2 = typeof r.imei_2 === "string" ? r.imei_2.trim() || null : r.imei_2 ?? null;
     const asset_id = typeof r.asset_id === "string" ? r.asset_id.trim() || null : r.asset_id ?? null;
-    const purchase_date = r.purchase_date || null;
-    const warranty_end = r.warranty_end || null;
     const condition = typeof r.condition === "string" ? r.condition.trim() || null : r.condition ?? null;
     const software_connectivity =
       typeof r.software_connectivity === "string" ? r.software_connectivity.trim() || null : r.software_connectivity ?? null;
     const specs = r.specs && typeof r.specs === "object" && !Array.isArray(r.specs) ? (r.specs as Record<string, unknown>) : {};
+    const company =
+      typeof specs.company === "string" ? specs.company.trim() : typeof r.name === "string" ? r.name.trim() : "";
+    const name = company;
 
-    if (!name || !categoryRaw) {
-      errors.push({ row: i + 1, message: "name and category required" });
+    if (!categoryRaw || !name) {
+      errors.push({ row: i + 1, message: "company (in specs) and category required" });
       continue;
     }
 
@@ -43,12 +43,11 @@ export async function POST(req: Request) {
       model,
       imei_1,
       imei_2,
-      purchase_date,
-      warranty_end,
       condition,
       software_connectivity,
       status: "Available",
       specs,
+      purchase_image_urls: [],
     };
 
     const { data, error } = await supabase.from("assets").insert(insert).select("id").single();

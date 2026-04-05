@@ -5,6 +5,9 @@ import { can } from "@/lib/rbac/permissions";
 import { auditLog } from "@/lib/audit/log";
 import { deleteReceiptForResource, upsertPendingReceipt } from "@/lib/resource-receipts";
 import { assertAssigneeAllowedInRegion } from "@/lib/admin-assignment/validate-assignee";
+import { hasMinimumPhotos, parseImageUrlArray } from "@/lib/assets/resource-photos";
+
+const ASSET_ASSIGNMENT_KEYS = new Set(["assigned_to_employee_id", "assignment_region_id", "assignment_notes"]);
 
 /** PM assigns assets to employees; admin updates details only. */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -15,8 +18,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { data: old } = await supabase.from("assets").select("*").eq("id", id).single();
   if (!old) return NextResponse.json({ message: "Not found" }, { status: 404 });
 
+  const patchKeys = Object.keys(body).filter((k) => body[k as string] !== undefined);
+  if (patchKeys.length === 0) {
+    return NextResponse.json({ ok: true });
+  }
+
   /* Status is controlled by assignment, returns workflow, and create — not free-form edits here. */
-  const keys = ["asset_id", "name", "category", "serial", "purchase_date", "warranty_end", "condition", "specs"];
+  const keys = ["asset_id", "name", "category", "serial", "condition", "specs"];
   const updates: Record<string, unknown> = {};
   keys.forEach((k) => {
     if (body[k] !== undefined) updates[k] = body[k];
@@ -34,6 +42,22 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (body[k] !== undefined) {
       updates[k] = typeof body[k] === "string" ? body[k].trim() || null : null;
     }
+  }
+  const assignmentOnly = patchKeys.every((k) => ASSET_ASSIGNMENT_KEYS.has(k));
+  if (!assignmentOnly) {
+    const merged =
+      body.purchase_image_urls !== undefined
+        ? parseImageUrlArray(body.purchase_image_urls)
+        : parseImageUrlArray((old as { purchase_image_urls?: unknown }).purchase_image_urls);
+    if (!hasMinimumPhotos(merged)) {
+      return NextResponse.json(
+        { message: "At least 2 intake condition photos are required. Add them in the asset form before saving other changes." },
+        { status: 400 }
+      );
+    }
+  }
+  if (body.purchase_image_urls !== undefined) {
+    updates.purchase_image_urls = parseImageUrlArray(body.purchase_image_urls);
   }
   const newEmployeeId = body.assigned_to_employee_id?.trim() || null;
   if (body.assigned_to_employee_id !== undefined) {
@@ -108,6 +132,8 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const supabase = await getDataClient();
   const { data: old } = await supabase.from("assets").select("*").eq("id", id).single();
   if (!old) return NextResponse.json({ message: "Not found" }, { status: 404 });
+
+  await deleteReceiptForResource(supabase, "asset", id);
 
   const { error } = await supabase.from("assets").delete().eq("id", id);
   if (error) return NextResponse.json({ message: error.message }, { status: 400 });
