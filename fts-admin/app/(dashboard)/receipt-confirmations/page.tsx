@@ -15,7 +15,7 @@ export default async function ReceiptConfirmationsPage() {
   const { data: rows } = await supabase
     .from("resource_receipt_confirmations")
     .select(
-      "id, employee_id, resource_type, resource_id, status, confirmation_message, assigned_at, confirmed_at, assigned_by_user_id"
+      "id, employee_id, resource_type, resource_id, status, confirmation_message, assigned_at, confirmed_at, assigned_by_user_id, receipt_image_urls"
     )
     .order("assigned_at", { ascending: false })
     .limit(500);
@@ -39,7 +39,7 @@ export default async function ReceiptConfirmationsPage() {
   const vehicleIds = list.filter((r) => r.resource_type === "vehicle").map((r) => r.resource_id);
 
   const [assetsRes, simsRes, vehiclesRes] = await Promise.all([
-    assetIds.length ? supabase.from("assets").select("id, name, serial").in("id", assetIds) : { data: [] },
+    assetIds.length ? supabase.from("assets").select("id, name, serial, category").in("id", assetIds) : { data: [] },
     simIds.length ? supabase.from("sim_cards").select("id, sim_number").in("id", simIds) : { data: [] },
     vehicleIds.length ? supabase.from("vehicles").select("id, plate_number").in("id", vehicleIds) : { data: [] },
   ]);
@@ -50,8 +50,11 @@ export default async function ReceiptConfirmationsPage() {
 
   function resourceLabel(r: (typeof list)[0]): string {
     if (r.resource_type === "asset") {
-      const a = assetMap.get(r.resource_id);
-      return a ? `${a.name}${a.serial ? ` · ${a.serial}` : ""}` : r.resource_id;
+      const a = assetMap.get(r.resource_id) as { name?: string | null; serial?: string | null } | undefined;
+      if (!a) return r.resource_id;
+      const n = typeof a.name === "string" && a.name.trim() ? a.name.trim() : "";
+      if (n) return n;
+      return a.serial ? String(a.serial) : r.resource_id;
     }
     if (r.resource_type === "sim_card") {
       const s = simMap.get(r.resource_id);
@@ -61,10 +64,27 @@ export default async function ReceiptConfirmationsPage() {
     return v ? String(v.plate_number) : r.resource_id;
   }
 
+  /** Human-readable kind: asset category (Laptop, Mobile, …), SIM, Vehicle. */
+  function typeLabel(r: (typeof list)[0]): string {
+    if (r.resource_type === "asset") {
+      const a = assetMap.get(r.resource_id) as { category?: string | null } | undefined;
+      const c = typeof a?.category === "string" && a.category.trim() ? a.category.trim() : "";
+      return c || "Asset";
+    }
+    if (r.resource_type === "sim_card") return "SIM";
+    return "Vehicle";
+  }
+
   function resourceHref(r: (typeof list)[0]): string {
     if (r.resource_type === "asset") return `/assets/${r.resource_id}`;
     if (r.resource_type === "sim_card") return `/sims/${r.resource_id}`;
     return `/vehicles/${r.resource_id}`;
+  }
+
+  function receiptPhotoUrls(r: { receipt_image_urls?: unknown }): string[] {
+    const u = r.receipt_image_urls;
+    if (!Array.isArray(u)) return [];
+    return u.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
   }
 
   return (
@@ -75,16 +95,19 @@ export default async function ReceiptConfirmationsPage() {
           Employees confirm in the{" "}
           <span className="font-medium text-zinc-800">employee portal</span> (Confirm receipt) when they physically
           receive assigned tools, SIMs, or vehicles. This list shows pending and confirmed records for your oversight.
+          For <span className="font-medium text-zinc-800">assets</span>, condition photos taken at confirmation appear in
+          the Receipt photos column once the employee has confirmed.
         </p>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white">
-        <table className="w-full min-w-[880px] text-left text-sm">
+        <table className="w-full min-w-[960px] text-left text-sm">
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50 text-zinc-700">
               <th className="px-4 py-3 font-medium">Status</th>
               <th className="px-4 py-3 font-medium">Type</th>
               <th className="px-4 py-3 font-medium">Resource</th>
+              <th className="px-4 py-3 font-medium">Receipt photos</th>
               <th className="px-4 py-3 font-medium">Employee</th>
               <th className="px-4 py-3 font-medium">Assigned</th>
               <th className="px-4 py-3 font-medium">Confirmed</th>
@@ -95,7 +118,7 @@ export default async function ReceiptConfirmationsPage() {
           <tbody>
             {list.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-zinc-500">
+                <td colSpan={9} className="px-4 py-8 text-center text-zinc-500">
                   No receipt records yet. Assignments will appear here after employees confirm (or while still pending).
                 </td>
               </tr>
@@ -113,13 +136,44 @@ export default async function ReceiptConfirmationsPage() {
                       {r.status === "confirmed" ? "Confirmed" : "Pending"}
                     </span>
                   </td>
-                  <td className="px-4 py-3 capitalize text-zinc-700">
-                    {r.resource_type === "sim_card" ? "SIM" : r.resource_type}
-                  </td>
+                  <td className="px-4 py-3 text-zinc-700">{typeLabel(r)}</td>
                   <td className="px-4 py-3">
                     <Link href={resourceHref(r)} className="font-medium text-teal-700 hover:underline">
                       {resourceLabel(r)}
                     </Link>
+                  </td>
+                  <td className="px-4 py-3 align-top">
+                    {r.resource_type === "asset" ? (
+                      (() => {
+                        const urls = receiptPhotoUrls(r);
+                        if (urls.length === 0) {
+                          return (
+                            <span className="text-zinc-400">
+                              {r.status === "confirmed" ? "—" : "After confirm"}
+                            </span>
+                          );
+                        }
+                        return (
+                          <div className="flex max-w-[220px] flex-wrap gap-1.5">
+                            {urls.map((url) => (
+                              <a
+                                key={url}
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="block h-14 w-14 shrink-0 overflow-hidden rounded border border-zinc-200 bg-zinc-50 hover:opacity-90"
+                                title="Open full size"
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={url} alt="" className="h-full w-full object-cover" />
+                              </a>
+                            ))}
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <span className="text-zinc-400">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-zinc-800">{empMap.get(r.employee_id) ?? r.employee_id}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600">

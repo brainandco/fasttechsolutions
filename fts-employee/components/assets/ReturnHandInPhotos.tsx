@@ -3,16 +3,28 @@
 import { useState } from "react";
 import { MAX_RESOURCE_PHOTOS, MIN_RESOURCE_PHOTOS } from "@/lib/resource-photos";
 
+export type ResourcePhotoPurpose =
+  | "asset-return"
+  | "vehicle-return"
+  | "receipt-confirmation"
+  | "asset-transfer-handover";
+
 export function ReturnHandInPhotos({
   purpose,
   assetId,
+  receiptConfirmationId,
   urls,
   onUrlsChange,
+  title = "Condition photos",
 }: {
-  purpose: "asset-return" | "vehicle-return";
+  purpose: ResourcePhotoPurpose;
   assetId?: string;
+  /** Pending receipt row id (resource_type must be asset). */
+  receiptConfirmationId?: string;
   urls: string[];
   onUrlsChange: (urls: string[]) => void;
+  /** Override default heading. */
+  title?: string;
 }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -30,6 +42,10 @@ export function ReturnHandInPhotos({
       fd.set("file", file);
       fd.set("purpose", purpose);
       if (purpose === "asset-return" && assetId) fd.set("asset_id", assetId);
+      if (purpose === "receipt-confirmation" && receiptConfirmationId) {
+        fd.set("receipt_confirmation_id", receiptConfirmationId);
+      }
+      if (purpose === "asset-transfer-handover" && assetId) fd.set("asset_id", assetId);
       const res = await fetch("/api/uploads/resource-photo", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -49,10 +65,11 @@ export function ReturnHandInPhotos({
   return (
     <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
       <p className="text-sm font-medium text-zinc-900">
-        Condition photos <span className="text-red-600">*</span>
+        {title} <span className="text-red-600">*</span>
       </p>
       <p className="mt-1 text-xs text-zinc-600">
-        Upload at least {MIN_RESOURCE_PHOTOS} photos showing the current condition (all sides / issues as needed).
+        Take at least {MIN_RESOURCE_PHOTOS} photos with your device camera showing the current condition (all sides /
+        issues as needed). On a phone, the camera should open; on some computers you may still pick a file.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {urls.map((url, i) => (
@@ -71,19 +88,23 @@ export function ReturnHandInPhotos({
         ))}
       </div>
       {urls.length < MAX_RESOURCE_PHOTOS ? (
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          disabled={uploading}
-          className="mt-2 text-xs file:mr-2 file:rounded file:border-0 file:bg-zinc-200 file:px-2 file:py-1"
-          onChange={(e) => {
-            const f = e.target.files?.[0] ?? null;
-            e.target.value = "";
-            void handleFile(f);
-          }}
-        />
+        <label className="mt-2 inline-block">
+          <span className="sr-only">Take or add condition photo</span>
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            capture="environment"
+            disabled={uploading}
+            className="text-xs file:mr-2 file:rounded file:border-0 file:bg-zinc-200 file:px-2 file:py-1"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              e.target.value = "";
+              void handleFile(f);
+            }}
+          />
+        </label>
       ) : null}
-      {uploading ? <p className="mt-1 text-xs text-zinc-500">Uploading…</p> : null}
+      {uploading ? <p className="mt-1 text-xs text-zinc-500">Sending photo…</p> : null}
       <p className={`mt-1 text-xs ${urls.length >= MIN_RESOURCE_PHOTOS ? "text-emerald-700" : "text-amber-800"}`}>
         {urls.length} / {MIN_RESOURCE_PHOTOS} minimum
       </p>

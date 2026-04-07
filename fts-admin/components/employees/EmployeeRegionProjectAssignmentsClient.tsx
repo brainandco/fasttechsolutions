@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { EMPLOYEE_RECORD_PROJECT_ROLES } from "@/lib/employees/employee-record-project-roles";
+import { employeeMayHaveFormalProjectOnRecord } from "@/lib/employees/employee-record-project-roles";
 
 type Row = {
   id: string;
@@ -10,12 +10,14 @@ type Row = {
   region_id: string | null;
   project_id: string | null;
   role: string;
+  /** `employee_roles.role` — use for project eligibility, not display `role`. */
+  role_code: string;
 };
 
 type Region = { id: string; name: string };
 type Project = { id: string; name: string; region_id: string };
 
-type AssignmentFilter = "all" | "no_region" | "no_project" | "complete";
+type AssignmentFilter = "all" | "no_region" | "complete";
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -24,9 +26,8 @@ function initials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-function rowAttention(row: Row): "ok" | "no_region" | "no_project" {
+function rowAttention(row: Row): "ok" | "no_region" {
   if (!row.region_id) return "no_region";
-  if (EMPLOYEE_RECORD_PROJECT_ROLES.has(row.role) && !row.project_id) return "no_project";
   return "ok";
 }
 
@@ -62,10 +63,7 @@ export function EmployeeRegionProjectAssignmentsClient({
   const [roleFilter, setRoleFilter] = useState<string>("");
   const [assignmentFilter, setAssignmentFilter] = useState<AssignmentFilter>("all");
 
-  const projectsForRegion = useMemo(() => {
-    if (!regionId) return [];
-    return projects.filter((p) => p.region_id === regionId);
-  }, [projects, regionId]);
+  const projectsSorted = useMemo(() => [...projects].sort((a, b) => a.name.localeCompare(b.name)), [projects]);
 
   const distinctRoles = useMemo(() => {
     const s = new Set<string>();
@@ -82,14 +80,13 @@ export function EmployeeRegionProjectAssignmentsClient({
       if (roleFilter && row.role !== roleFilter) return false;
       const att = rowAttention(row);
       if (assignmentFilter === "no_region" && att !== "no_region") return false;
-      if (assignmentFilter === "no_project" && att !== "no_project") return false;
       if (assignmentFilter === "complete" && att !== "ok") return false;
       return true;
     });
   }, [employees, query, roleFilter, assignmentFilter]);
 
   const sortedRows = useMemo(() => {
-    const order = { no_region: 0, no_project: 1, ok: 2 };
+    const order = { no_region: 0, ok: 1 };
     return [...filtered].sort((a, b) => {
       const da = rowAttention(a);
       const db = rowAttention(b);
@@ -100,15 +97,12 @@ export function EmployeeRegionProjectAssignmentsClient({
 
   const stats = useMemo(() => {
     let needRegion = 0;
-    let needProject = 0;
-    let complete = 0;
+    let withRegion = 0;
     for (const e of employees) {
-      const a = rowAttention(e);
-      if (a === "no_region") needRegion++;
-      else if (a === "no_project") needProject++;
-      else complete++;
+      if (!e.region_id) needRegion++;
+      else withRegion++;
     }
-    return { total: employees.length, needRegion, needProject, complete };
+    return { total: employees.length, needRegion, withRegion };
   }, [employees]);
 
   function startEdit(row: Row) {
@@ -123,15 +117,16 @@ export function EmployeeRegionProjectAssignmentsClient({
     setMessage(null);
   }
 
-  async function save(employeeId: string, role: string) {
+  async function save(employeeId: string, roleCode: string) {
     setSaving(true);
     setMessage(null);
+    const mayProject = employeeMayHaveFormalProjectOnRecord(roleCode);
     const body: { region_id: string | null; project_id: string | null } = {
       region_id: regionId || null,
-      project_id: EMPLOYEE_RECORD_PROJECT_ROLES.has(role) ? (projectId || null) : null,
+      project_id: mayProject ? (projectId || null) : null,
     };
-    if (!EMPLOYEE_RECORD_PROJECT_ROLES.has(role) && projectId) {
-      setMessage({ type: "err", text: "Only Project Manager, QA, PP, Project Coordinator, and Self DT can have a project on their record." });
+    if (!mayProject && projectId) {
+      setMessage({ type: "err", text: "Driver/Rigger and QC cannot have a formal project on their record." });
       setSaving(false);
       return;
     }
@@ -161,7 +156,7 @@ export function EmployeeRegionProjectAssignmentsClient({
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div className="rounded-xl border border-zinc-100 bg-white p-4 shadow-sm">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Employees</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900">{stats.total}</p>
@@ -170,14 +165,9 @@ export function EmployeeRegionProjectAssignmentsClient({
           <p className="text-xs font-medium uppercase tracking-wide text-amber-800/80">No region</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-amber-900">{stats.needRegion}</p>
         </div>
-        <div className="rounded-xl border border-orange-100 bg-orange-50/50 p-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-wide text-orange-900/80">Needs project</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums text-orange-900">{stats.needProject}</p>
-          <p className="mt-1 text-[11px] text-orange-800/80">PM-type roles with region but no project</p>
-        </div>
         <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-wide text-emerald-800/80">Complete</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums text-emerald-900">{stats.complete}</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-emerald-800/80">Region assigned</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-emerald-900">{stats.withRegion}</p>
         </div>
       </div>
 
@@ -236,8 +226,7 @@ export function EmployeeRegionProjectAssignmentsClient({
           >
             <option value="all">All</option>
             <option value="no_region">Missing region</option>
-            <option value="no_project">Missing project (PM-type)</option>
-            <option value="complete">Fully assigned</option>
+            <option value="complete">Has region</option>
           </select>
         </div>
       </div>
@@ -296,9 +285,9 @@ export function EmployeeRegionProjectAssignmentsClient({
                           </span>
                           <div className="min-w-0">
                             <p className="truncate font-medium text-zinc-900">{row.full_name || "—"}</p>
-                            {att !== "ok" && !isEditing ? (
+                            {att === "no_region" && !isEditing ? (
                               <span className="mt-0.5 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900">
-                                {att === "no_region" ? "Needs region" : "Needs project"}
+                                Needs region
                               </span>
                             ) : null}
                           </div>
@@ -318,10 +307,7 @@ export function EmployeeRegionProjectAssignmentsClient({
                           <td className="px-4 py-3 align-middle">
                             <select
                               value={regionId}
-                              onChange={(e) => {
-                                setRegionId(e.target.value);
-                                setProjectId("");
-                              }}
+                              onChange={(e) => setRegionId(e.target.value)}
                               className={selectClass}
                             >
                               <option value="">— No region —</option>
@@ -333,22 +319,21 @@ export function EmployeeRegionProjectAssignmentsClient({
                             </select>
                           </td>
                           <td className="px-4 py-3 align-middle">
-                            {EMPLOYEE_RECORD_PROJECT_ROLES.has(row.role) ? (
+                            {employeeMayHaveFormalProjectOnRecord(row.role_code) ? (
                               <select
                                 value={projectId}
                                 onChange={(e) => setProjectId(e.target.value)}
-                                disabled={!regionId}
-                                className={`${selectClass} disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-60`}
+                                className={selectClass}
                               >
                                 <option value="">— No project —</option>
-                                {projectsForRegion.map((p) => (
+                                {projectsSorted.map((p) => (
                                   <option key={p.id} value={p.id}>
                                     {p.name}
                                   </option>
                                 ))}
                               </select>
                             ) : (
-                              <span className="text-xs text-zinc-400">Region only</span>
+                              <span className="text-xs text-zinc-400">Region only (Driver/Rigger, QC)</span>
                             )}
                           </td>
                           <td className="px-4 py-3 align-middle text-right">
@@ -356,7 +341,7 @@ export function EmployeeRegionProjectAssignmentsClient({
                               <button
                                 type="button"
                                 disabled={saving}
-                                onClick={() => save(row.id, row.role)}
+                                onClick={() => save(row.id, row.role_code)}
                                 className="inline-flex items-center rounded-lg bg-zinc-900 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50"
                               >
                                 {saving ? "Saving…" : "Save"}
@@ -385,14 +370,14 @@ export function EmployeeRegionProjectAssignmentsClient({
                             )}
                           </td>
                           <td className="px-4 py-3.5 align-middle">
-                            {EMPLOYEE_RECORD_PROJECT_ROLES.has(row.role) ? (
+                            {employeeMayHaveFormalProjectOnRecord(row.role_code) ? (
                               projectName(row.project_id) ? (
                                 <span className="inline-flex max-w-[220px] truncate rounded-lg border border-sky-100 bg-sky-50/90 px-2.5 py-1 text-xs font-medium text-sky-900">
                                   {projectName(row.project_id)}
                                 </span>
                               ) : (
-                                <span className="inline-flex rounded-lg border border-dashed border-orange-200 bg-orange-50/50 px-2.5 py-1 text-xs font-medium text-orange-900">
-                                  Unassigned
+                                <span className="inline-flex rounded-lg border border-dashed border-zinc-200 bg-zinc-50/80 px-2.5 py-1 text-xs font-medium text-zinc-600">
+                                  No project
                                 </span>
                               )
                             ) : (

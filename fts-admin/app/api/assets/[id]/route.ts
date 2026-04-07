@@ -5,9 +5,8 @@ import { can } from "@/lib/rbac/permissions";
 import { auditLog } from "@/lib/audit/log";
 import { deleteReceiptForResource, upsertPendingReceipt } from "@/lib/resource-receipts";
 import { assertAssigneeAllowedInRegion } from "@/lib/admin-assignment/validate-assignee";
-import { hasMinimumPhotos, parseImageUrlArray } from "@/lib/assets/resource-photos";
-
-const ASSET_ASSIGNMENT_KEYS = new Set(["assigned_to_employee_id", "assignment_region_id", "assignment_notes"]);
+import { parseImageUrlArray } from "@/lib/assets/resource-photos";
+import { assetIdentifierConflictMessage } from "@/lib/data-uniqueness";
 
 /** PM assigns assets to employees; admin updates details only. */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -43,19 +42,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       updates[k] = typeof body[k] === "string" ? body[k].trim() || null : null;
     }
   }
-  const assignmentOnly = patchKeys.every((k) => ASSET_ASSIGNMENT_KEYS.has(k));
-  if (!assignmentOnly) {
-    const merged =
-      body.purchase_image_urls !== undefined
-        ? parseImageUrlArray(body.purchase_image_urls)
-        : parseImageUrlArray((old as { purchase_image_urls?: unknown }).purchase_image_urls);
-    if (!hasMinimumPhotos(merged)) {
-      return NextResponse.json(
-        { message: "At least 2 intake condition photos are required. Add them in the asset form before saving other changes." },
-        { status: 400 }
-      );
-    }
-  }
   if (body.purchase_image_urls !== undefined) {
     updates.purchase_image_urls = parseImageUrlArray(body.purchase_image_urls);
   }
@@ -88,6 +74,36 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       updates.status = "Available";
     }
   }
+
+  const touchesId =
+    updates.serial !== undefined ||
+    updates.asset_id !== undefined ||
+    updates.imei_1 !== undefined ||
+    updates.imei_2 !== undefined;
+  if (touchesId) {
+    const o = old as {
+      serial?: string | null;
+      asset_id?: string | null;
+      imei_1?: string | null;
+      imei_2?: string | null;
+    };
+    const pick = (u: unknown, fallback: string | null | undefined) => {
+      if (u !== undefined) return typeof u === "string" ? u.trim() || null : null;
+      return typeof fallback === "string" ? fallback.trim() || null : null;
+    };
+    const idMsg = await assetIdentifierConflictMessage(
+      supabase,
+      {
+        serial: pick(updates.serial, o.serial),
+        asset_id: pick(updates.asset_id, o.asset_id),
+        imei_1: pick(updates.imei_1, o.imei_1),
+        imei_2: pick(updates.imei_2, o.imei_2),
+      },
+      id
+    );
+    if (idMsg) return NextResponse.json({ message: idMsg }, { status: 400 });
+  }
+
   const { error } = await supabase.from("assets").update(updates).eq("id", id);
   if (error) return NextResponse.json({ message: error.message }, { status: 400 });
 
