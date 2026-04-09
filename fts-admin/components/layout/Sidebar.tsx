@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { UserAvatar } from "@/components/profile/UserAvatar";
+import { PERMISSION_EMPLOYEE_ASSIGN_REGION_PROJECT, PERMISSION_EMPLOYEE_MANAGE } from "@/lib/rbac/permission-codes";
 
 /** Optional permission: user needs this permission (or be super) to see the link. superOnly: only super user sees it. */
 type NavLink = {
@@ -41,8 +42,16 @@ const navStructure: NavEntry[] = [
       label: "People",
       children: [
         { href: "/people", label: "Users & employees", permission: "users.view" },
-        { href: "/employees", label: "Employees", permission: "users.view" },
-        { href: "/employees/region-project-assignments", label: "Employee region & project", superOnly: true },
+        {
+          href: "/employees",
+          label: "Employees",
+          permissionAnyOf: ["users.view", PERMISSION_EMPLOYEE_MANAGE],
+        },
+        {
+          href: "/employees/region-project-assignments",
+          label: "Employee region & project",
+          permission: PERMISSION_EMPLOYEE_ASSIGN_REGION_PROJECT,
+        },
         { href: "/delegate", label: "Delegate" },
       ],
     },
@@ -93,6 +102,7 @@ const navStructure: NavEntry[] = [
       label: "System",
       children: [
         { href: "/exports", label: "Exports", permission: "approvals.approve" },
+        { href: "/company-documents", label: "Company documents", permission: "approvals.approve" },
         { href: "/audit", label: "Audit logs", permission: "audit_logs.view_all" },
         { href: "/settings/roles", label: "Roles & permissions", superOnly: true },
       ],

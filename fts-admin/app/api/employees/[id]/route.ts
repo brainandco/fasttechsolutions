@@ -1,13 +1,14 @@
 import { getDataClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { requireSuper } from "@/lib/rbac/permissions";
+import { can } from "@/lib/rbac/permissions";
 import { auditLog } from "@/lib/audit/log";
 import { deleteEmployeeById } from "@/lib/employees/delete-employee-internal";
 import { normalizeEmployeeRolePayload, ROLES_NOT_ALLOWED_ON_TEAM } from "@/lib/employees/employee-role-options";
 import { employeeIdentityConflict } from "@/lib/data-uniqueness";
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const superResult = await requireSuper();
-  if (!superResult.allowed) return NextResponse.json({ message: "Only Super User can edit employees." }, { status: 403 });
+  if (!(await can("employees.manage"))) {
+    return NextResponse.json({ message: "You do not have permission to edit employees." }, { status: 403 });
+  }
 
   const { id } = await params;
   const body = await req.json();
@@ -94,8 +95,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const superResult = await requireSuper();
-  if (!superResult.allowed) return NextResponse.json({ message: "Only Super User can delete employees." }, { status: 403 });
+  if (!(await can("employees.manage"))) {
+    return NextResponse.json({ message: "You do not have permission to delete employees." }, { status: 403 });
+  }
 
   const { id } = await params;
   const result = await deleteEmployeeById(id);

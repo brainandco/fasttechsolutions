@@ -1,5 +1,6 @@
 import { getDataClient } from "@/lib/supabase/server";
 import { can, getCurrentUserProfile } from "@/lib/rbac/permissions";
+import { PERMISSION_EMPLOYEE_ASSIGN_REGION_PROJECT, PERMISSION_EMPLOYEE_MANAGE } from "@/lib/rbac/permission-codes";
 import { PmScopeSettings } from "@/components/employees/PmScopeSettings";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
@@ -9,7 +10,7 @@ import { ResendCredentialsButton } from "@/components/employees/ResendCredential
 import { formatEmployeeRoleDisplay } from "@/lib/employees/employee-role-options";
 
 export default async function EmployeeDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  if (!(await can("users.edit"))) redirect("/employees");
+  if (!(await can("users.edit")) && !(await can(PERMISSION_EMPLOYEE_MANAGE))) redirect("/employees");
 
   const { id } = await params;
   const supabase = await getDataClient();
@@ -24,6 +25,9 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
   const { profile } = await getCurrentUserProfile();
   const isSuper = profile?.is_super_user ?? false;
   const canEditUsers = await can("users.edit");
+  const canManageEmployees = await can(PERMISSION_EMPLOYEE_MANAGE);
+  const canEditEmployeeRecord = canEditUsers || canManageEmployees;
+  const canAssignRegionProject = await can(PERMISSION_EMPLOYEE_ASSIGN_REGION_PROJECT);
   const isPm = roles.includes("Project Manager");
 
   const { data: regionsList } = await supabase.from("regions").select("id, name").order("name");
@@ -129,7 +133,7 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
           <h2 className="text-lg font-semibold text-zinc-900">Profile & roles</h2>
           <p className="mt-0.5 text-sm text-zinc-500">
             Edit details, role, and status. Region and project are not edited here — assign them after creation
-            {isSuper ? (
+            {canAssignRegionProject ? (
               <>
                 {" "}
                 on{" "}
@@ -138,21 +142,21 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
                 </Link>
               </>
             ) : (
-              <> (Super User)</>
+              <> (requires the &quot;Assign employee region &amp; project&quot; permission)</>
             )}
             .
           </p>
         </div>
         <div className="p-6">
-          <EmployeeForm existing={employeeWithRoles} canDeleteEmployee={isSuper} />
+          <EmployeeForm existing={employeeWithRoles} canDeleteEmployee={isSuper || canManageEmployees} />
         </div>
       </div>
 
       {isPm ? (
         <PmScopeSettings
           employeeId={id}
-          isSuper={isSuper}
-          canEditProjects={canEditUsers}
+          canEditExtraPmRegions={canManageEmployees}
+          canEditProjects={canEditEmployeeRecord}
           isPm={isPm}
           primaryRegionId={employee.region_id}
           allRegions={regionsList ?? []}
