@@ -1,14 +1,16 @@
 import { createServerSupabaseClient, getDataClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getCurrentUserProfile } from "@/lib/rbac/permissions";
+import { can, getCurrentUserProfile } from "@/lib/rbac/permissions";
 import { TeamForm } from "@/components/teams/TeamForm";
 import { EntityHistory } from "@/components/audit/EntityHistory";
 import { TerminateTeamButton } from "@/components/teams/TerminateTeamButton";
+import { SendTeamMemberCredentialsButton } from "@/components/teams/SendTeamMemberCredentialsButton";
 import {
   getTeamTerminationBlockers,
   teamTerminationBlockedMessage,
 } from "@/lib/teams/teamTermination";
+import { FormCallout } from "@/components/ui/FormSection";
 
 export default async function TeamDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -27,6 +29,7 @@ export default async function TeamDetailPage({ params }: { params: Promise<{ id:
 
   const { profile } = await getCurrentUserProfile();
   const isSuper = profile?.is_super_user ?? false;
+  const canManageTeams = await can("teams.manage");
 
   const { data: employees } = await supabase.from("employees").select("id, full_name, region_id").eq("status", "ACTIVE");
   const { data: teams } = await supabase.from("teams").select("id, dt_employee_id, driver_rigger_employee_id");
@@ -119,20 +122,20 @@ export default async function TeamDetailPage({ params }: { params: Promise<{ id:
           />
         )}
       </div>
-      <section>
-        <h2 className="mb-3 text-lg font-medium text-zinc-900">Edit team</h2>
-        <p className="mb-4 max-w-2xl rounded-lg border border-indigo-100 bg-indigo-50/80 px-4 py-3 text-sm text-indigo-950">
-          You cannot replace a DT or Driver/Rigger while they still have assigned assets, SIMs, or a vehicle. They must return
-          everything via the Employee Portal (QC is notified) before you save a new member. Terminating the team is blocked
-          until the same is true for every member.
-        </p>
-        <p className="mb-4 text-sm text-zinc-600">
-          Region and project on this team follow the <strong>DT</strong> (or Self DT) employee — update them on{" "}
-          <Link href="/employees/region-project-assignments" className="font-medium text-indigo-600 hover:text-indigo-800">
-            Employee region &amp; project assignments
-          </Link>
-          . Driver/Rigger must stay in the same region as the DT when you change members.
-        </p>
+      <section className="space-y-6">
+        <h2 className="text-lg font-medium text-zinc-900">Edit team</h2>
+        <div className="max-w-3xl space-y-4">
+          <FormCallout variant="warning" title="Before you change members">
+            You cannot replace a DT or Driver/Rigger while they still have assigned assets, SIMs, or a vehicle. They must
+            return everything via the Employee Portal (QC is notified) before you save a new member. Terminating the team is
+            blocked until the same is true for every member.
+          </FormCallout>
+          <FormCallout variant="info" title="Region &amp; project">
+            They follow the <strong>DT</strong> (or Self DT) employee — update on{" "}
+            <Link href="/employees/region-project-assignments">Employee region &amp; project assignments</Link>. The
+            Driver/Rigger must stay in the same region as the DT when you change members.
+          </FormCallout>
+        </div>
         <TeamForm existing={team} employees={employeesWithRoles} unavailableEmployeeIds={unavailableEmployeeIds} />
       </section>
       {(dtId || drId) && (
@@ -179,6 +182,16 @@ export default async function TeamDetailPage({ params }: { params: Promise<{ id:
             {dtId && <li><strong>DT:</strong> {dtEmp?.full_name ?? dtId}</li>}
             {drId && <li><strong>Driver/Rigger:</strong> {drEmp?.full_name ?? drId}</li>}
           </ul>
+          {canManageTeams && (
+            <div className="mt-5 border-t border-zinc-100 pt-5">
+              <h3 className="mb-2 text-sm font-medium text-zinc-800">Employee Portal credentials</h3>
+              <p className="mb-3 text-xs text-zinc-500">
+                Sends the same credential email as on each employee&apos;s page (new temporary password per person). Only
+                current DT and Driver/Rigger on this team receive it.
+              </p>
+              <SendTeamMemberCredentialsButton teamId={id} memberCount={memberIdsForFleet.length} />
+            </div>
+          )}
         </section>
       )}
       {(dtId || drId) && (
