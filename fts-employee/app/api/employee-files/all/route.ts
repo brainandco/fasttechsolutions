@@ -1,16 +1,14 @@
-import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getDataClient } from "@/lib/supabase/server";
 import { resolveEmployeeFileAccess } from "@/lib/employee-files/access";
+import { deleteS3Keys } from "@/lib/employee-files/batch-delete-s3";
 import { getWasabiEmployeeFilesBucket, getWasabiEmployeeFilesS3Client } from "@/lib/wasabi/s3-client";
 import { NextResponse } from "next/server";
 
-export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const { id } = await ctx.params;
-  if (!id) {
-    return NextResponse.json({ message: "id required" }, { status: 400 });
-  }
-
+/**
+ * DELETE — remove all of the current employee's file metadata and their objects in storage.
+ */
+export async function DELETE() {
   const userClient = await createServerSupabaseClient();
   const {
     data: { session },
@@ -29,28 +27,32 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ message: "Delete is allowed for PM, PP, and Team Lead only." }, { status: 403 });
   }
 
-  const { data: row, error } = await supabase
+  const { data: rows, error: qErr } = await supabase
     .from("employee_personal_files")
-    .select("id, employee_id, storage_key")
-    .eq("id", id)
-    .maybeSingle();
-  if (error || !row) {
-    return NextResponse.json({ message: "File not found" }, { status: 404 });
+    .select("id, storage_key")
+    .eq("employee_id", me.id);
+  if (qErr) {
+    return NextResponse.json({ message: qErr.message }, { status: 400 });
   }
-  if (row.employee_id !== me.id) {
-    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  const list = rows ?? [];
+  if (list.length === 0) {
+    return NextResponse.json({ ok: true, removed: 0 });
   }
 
-  const bucket = getWasabiEmployeeFilesBucket();
+  const keys = list.map((r) => r.storage_key);
   const s3 = getWasabiEmployeeFilesS3Client();
+  const bucket = getWasabiEmployeeFilesBucket();
   try {
-    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: row.storage_key }));
-  } catch {
-    // still remove DB row so UI doesn't get stuck; orphan object is acceptable to delete manually
+    await deleteS3Keys(s3, bucket, keys);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Storage delete failed";
+    return NextResponse.json({ message: msg }, { status: 500 });
   }
-  const { error: del } = await supabase.from("employee_personal_files").delete().eq("id", id);
-  if (del) {
-    return NextResponse.json({ message: del.message }, { status: 400 });
+
+  const { error: delErr } = await supabase.from("employee_personal_files").delete().eq("employee_id", me.id);
+  if (delErr) {
+    return NextResponse.json({ message: delErr.message }, { status: 400 });
   }
-  return NextResponse.json({ ok: true });
+
+  return NextResponse.json({ ok: true, removed: list.length });
 }

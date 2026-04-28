@@ -1,45 +1,29 @@
 import { HeadObjectCommand } from "@aws-sdk/client-s3";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getDataClient } from "@/lib/supabase/server";
+import { PERMISSION_EMPLOYEE_FILES_MANAGE } from "@/lib/rbac/permission-codes";
+import { can } from "@/lib/rbac/permissions";
 import { getWasabiEmployeeFilesBucket, getWasabiEmployeeFilesS3Client } from "@/lib/wasabi/s3-client";
 import { NextResponse } from "next/server";
 
-/** POST — after browser PUTs to presigned URL, mark row active and set byte size. */
+/** POST — admin completes upload after PUT to presigned URL. */
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  if (!(await can(PERMISSION_EMPLOYEE_FILES_MANAGE))) {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+
   const { id } = await ctx.params;
   if (!id) {
     return NextResponse.json({ message: "id required" }, { status: 400 });
   }
 
-  const userClient = await createServerSupabaseClient();
-  const {
-    data: { session },
-  } = await userClient.auth.getSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-  }
-
   const supabase = await getDataClient();
-  const email = (session.user.email ?? "").trim().toLowerCase();
-  const { data: me } = await supabase
-    .from("employees")
-    .select("id, status, region_id")
-    .eq("email", email)
-    .maybeSingle();
-  if (!me || me.status !== "ACTIVE") {
-    return NextResponse.json({ message: "No active employee profile" }, { status: 403 });
-  }
-
   const { data: row, error: fetchErr } = await supabase
     .from("employee_personal_files")
-    .select("id, employee_id, storage_key, upload_status")
+    .select("id, storage_key, upload_status")
     .eq("id", id)
     .maybeSingle();
   if (fetchErr || !row) {
     return NextResponse.json({ message: "File not found" }, { status: 404 });
-  }
-  if (row.employee_id !== me.id) {
-    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
   if (row.upload_status !== "pending") {
     return NextResponse.json({ message: "Already completed" }, { status: 400 });

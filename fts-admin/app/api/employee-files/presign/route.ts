@@ -1,23 +1,26 @@
 import { randomUUID } from "crypto";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getDataClient } from "@/lib/supabase/server";
+import { PERMISSION_EMPLOYEE_FILES_MANAGE } from "@/lib/rbac/permission-codes";
+import { can } from "@/lib/rbac/permissions";
 import { buildEmployeeFileStorageKey, isAllowedEmployeeFileName, safeEmployeeFileName } from "@/lib/employee-files/storage";
 import { getWasabiEmployeeFilesBucket, getWasabiEmployeeFileMaxBytes, getWasabiEmployeeFilesS3Client } from "@/lib/wasabi/s3-client";
 import { NextResponse } from "next/server";
 
 const PRESIGN_EXPIRES_SEC = 3600;
 
-type Body = { fileName?: string; contentType?: string; byteSize?: number | null };
+type Body = {
+  regionId?: string;
+  employeeId?: string;
+  fileName?: string;
+  contentType?: string;
+  byteSize?: number | null;
+};
 
 export async function POST(req: Request) {
-  const userClient = await createServerSupabaseClient();
-  const {
-    data: { session },
-  } = await userClient.auth.getSession();
-  if (!session?.user?.id) {
-    return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  if (!(await can(PERMISSION_EMPLOYEE_FILES_MANAGE))) {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
   let body: Body;
@@ -25,6 +28,12 @@ export async function POST(req: Request) {
     body = (await req.json()) as Body;
   } catch {
     return NextResponse.json({ message: "Invalid JSON" }, { status: 400 });
+  }
+
+  const regionId = String(body.regionId ?? "").trim();
+  const employeeId = String(body.employeeId ?? "").trim();
+  if (!regionId || !employeeId) {
+    return NextResponse.json({ message: "regionId and employeeId are required" }, { status: 400 });
   }
 
   const fileName = safeEmployeeFileName(String(body.fileName ?? ""));
@@ -42,39 +51,34 @@ export async function POST(req: Request) {
   }
 
   const supabase = await getDataClient();
-  const email = (session.user.email ?? "").trim().toLowerCase();
-  const { data: me } = await supabase
+  const { data: emp, error: empErr } = await supabase
     .from("employees")
-    .select("id, status, region_id")
-    .eq("email", email)
+    .select("id, region_id, status")
+    .eq("id", employeeId)
     .maybeSingle();
-  if (!me || me.status !== "ACTIVE") {
-    return NextResponse.json({ message: "No active employee profile" }, { status: 403 });
+  if (empErr || !emp || emp.status !== "ACTIVE") {
+    return NextResponse.json({ message: "Employee not found or inactive" }, { status: 400 });
   }
-  if (!me.region_id) {
-    return NextResponse.json({ message: "Your account has no region. Contact an administrator." }, { status: 400 });
+  if (emp.region_id !== regionId) {
+    return NextResponse.json({ message: "Employee is not in the selected region" }, { status: 400 });
   }
 
   const { data: folder, error: folderErr } = await supabase
     .from("employee_file_region_folders")
     .select("id, path_segment")
-    .eq("region_id", me.region_id)
+    .eq("region_id", regionId)
     .maybeSingle();
-
   if (folderErr || !folder) {
-    return NextResponse.json(
-      { message: "File uploads are not enabled for your region yet. An administrator must create the region folder first." },
-      { status: 400 }
-    );
+    return NextResponse.json({ message: "Create a region folder before uploading" }, { status: 400 });
   }
 
   const fileId = randomUUID();
-  const storageKey = buildEmployeeFileStorageKey(folder.path_segment, me.id, fileId, fileName);
+  const storageKey = buildEmployeeFileStorageKey(folder.path_segment, emp.id, fileId, fileName);
 
   const { error: insErr } = await supabase.from("employee_personal_files").insert({
     id: fileId,
-    employee_id: me.id,
-    region_id: me.region_id,
+    employee_id: emp.id,
+    region_id: regionId,
     folder_id: folder.id,
     storage_key: storageKey,
     file_name: fileName,
