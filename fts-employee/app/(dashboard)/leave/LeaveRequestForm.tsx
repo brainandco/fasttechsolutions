@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GuarantorCombobox, type GuarantorRow } from "./GuarantorCombobox";
 
+type GuarantorPickerMode = "same_region" | "pm_picks_admin" | "admin_no_guarantor";
+
+type GuarantorIdKind = "employee" | "portal_user";
+
 const LEAVE_TYPES = [
   "Annual",
   "Sick",
@@ -22,6 +26,9 @@ export function LeaveRequestForm() {
   const [reason, setReason] = useState("");
   const [leaveType, setLeaveType] = useState<string>(LEAVE_TYPES[0]);
   const [guarantors, setGuarantors] = useState<GuarantorRow[]>([]);
+  const [guarantorMode, setGuarantorMode] = useState<GuarantorPickerMode>("same_region");
+  const [requiresGuarantor, setRequiresGuarantor] = useState(true);
+  const [guarantorIdKind, setGuarantorIdKind] = useState<GuarantorIdKind>("employee");
   const [guarantorId, setGuarantorId] = useState("");
   const [guarantorPickerKey, setGuarantorPickerKey] = useState(0);
   const [loadingGuarantors, setLoadingGuarantors] = useState(true);
@@ -37,6 +44,14 @@ export function LeaveRequestForm() {
         const data = await res.json().catch(() => ({}));
         if (!cancelled && res.ok && Array.isArray(data.employees)) {
           setGuarantors(data.employees);
+          const m = data.mode;
+          if (m === "pm_picks_admin" || m === "admin_no_guarantor" || m === "same_region") {
+            setGuarantorMode(m);
+          } else {
+            setGuarantorMode("same_region");
+          }
+          setRequiresGuarantor(data.requires_guarantor !== false);
+          setGuarantorIdKind(data.guarantor_id_kind === "portal_user" ? "portal_user" : "employee");
         }
       } finally {
         if (!cancelled) setLoadingGuarantors(false);
@@ -54,8 +69,12 @@ export function LeaveRequestForm() {
       setMessage({ type: "error", text: "From date and to date are required." });
       return;
     }
-    if (!guarantorId) {
-      setMessage({ type: "error", text: "Choose a guarantor from your region." });
+    if (requiresGuarantor && !guarantorId) {
+      const hint =
+        guarantorMode === "pm_picks_admin"
+          ? "Choose a portal Administrator or Super User as guarantor."
+          : "Choose a guarantor from your region.";
+      setMessage({ type: "error", text: hint });
       return;
     }
     if (!leaveType.trim()) {
@@ -68,6 +87,11 @@ export function LeaveRequestForm() {
     }
     setLoading(true);
     try {
+      const guarantorBody = !requiresGuarantor
+        ? {}
+        : guarantorIdKind === "portal_user"
+          ? { guarantor_user_id: guarantorId }
+          : { guarantor_employee_id: guarantorId };
       const res = await fetch("/api/leave", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -75,7 +99,7 @@ export function LeaveRequestForm() {
           from_date: fromDate,
           to_date: toDate,
           reason: reason.trim(),
-          guarantor_employee_id: guarantorId,
+          ...guarantorBody,
           leave_type: leaveType.trim(),
         }),
         credentials: "include",
@@ -118,21 +142,41 @@ export function LeaveRequestForm() {
           ))}
         </select>
       </div>
-      <div>
-        <span className="mb-1 block text-sm font-medium text-zinc-700">Guarantor (same region)</span>
-        <GuarantorCombobox
-          key={guarantorPickerKey}
-          employees={guarantors}
-          loading={loadingGuarantors}
-          valueId={guarantorId}
-          onChangeId={setGuarantorId}
-        />
-        {!loadingGuarantors && guarantors.length === 0 ? (
-          <p className="mt-1 text-xs text-amber-700">No other active employees in your region to select as guarantor.</p>
-        ) : (
-          <p className="mt-1 text-xs text-zinc-500">Search by name or job line, then click a row to select.</p>
-        )}
-      </div>
+      {requiresGuarantor ? (
+        <div>
+          <span className="mb-1 block text-sm font-medium text-zinc-700">
+            {guarantorMode === "pm_picks_admin"
+              ? "Guarantor (portal Administrator / Super User)"
+              : "Guarantor (same region)"}
+          </span>
+          <GuarantorCombobox
+            key={guarantorPickerKey}
+            employees={guarantors}
+            loading={loadingGuarantors}
+            valueId={guarantorId}
+            onChangeId={setGuarantorId}
+            noMatchHint={
+              guarantorMode === "pm_picks_admin"
+                ? "No matching portal administrator."
+                : "No match in your region."
+            }
+          />
+          {!loadingGuarantors && guarantors.length === 0 ? (
+            <p className="mt-1 text-xs text-amber-700">
+              {guarantorMode === "pm_picks_admin"
+                ? "No portal Administrator or Super User accounts are available as guarantor. Contact HR."
+                : "No other active employees in your region to select as guarantor."}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-zinc-500">Search by name or job line, then click a row to select.</p>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-sm text-sky-950">
+          As a portal Administrator or Super User, you do not add a guarantor. Your request goes to a{" "}
+          <strong>Super User</strong> for approval (no performa workflow).
+        </div>
+      )}
       <div>
         <label htmlFor="from_date" className="mb-1 block text-sm font-medium text-zinc-700">
           From date
@@ -178,7 +222,7 @@ export function LeaveRequestForm() {
       ) : null}
       <button
         type="submit"
-        disabled={loading || loadingGuarantors || guarantors.length === 0}
+        disabled={loading || loadingGuarantors || (requiresGuarantor && guarantors.length === 0)}
         className="rounded bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
       >
         {loading ? "Submitting…" : "Submit leave request"}
