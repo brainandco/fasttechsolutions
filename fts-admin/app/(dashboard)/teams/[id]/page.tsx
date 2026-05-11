@@ -6,6 +6,7 @@ import { TeamForm } from "@/components/teams/TeamForm";
 import { EntityHistory } from "@/components/audit/EntityHistory";
 import { TerminateTeamButton } from "@/components/teams/TerminateTeamButton";
 import { SendTeamMemberCredentialsButton } from "@/components/teams/SendTeamMemberCredentialsButton";
+import { SyncTeamFromDtButton } from "@/components/teams/SyncTeamFromDtButton";
 import {
   getTeamTerminationBlockers,
   teamTerminationBlockedMessage,
@@ -97,8 +98,8 @@ export default async function TeamDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
           <Link href="/teams" className="text-sm text-zinc-500 hover:text-zinc-900">← Teams</Link>
           <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold text-zinc-900">
             {team.name}
@@ -112,15 +113,21 @@ export default async function TeamDetailPage({ params }: { params: Promise<{ id:
             <span className="text-sm font-normal text-zinc-500">· {region.name}</span>
           ) : null}
           {project?.name ? <span className="text-sm font-normal text-zinc-500">· {project.name}</span> : null}
+          {!project?.name && team.project_id ? (
+            <span className="text-sm font-normal text-zinc-400">· Project id on file (no name)</span>
+          ) : null}
         </div>
-        {isSuper && (
-          <TerminateTeamButton
-            teamId={id}
-            teamName={team.name}
-            canTerminate={terminationBlockers.canTerminate}
-            blockReason={terminationBlockedMessage}
-          />
-        )}
+        <div className="flex shrink-0 flex-col items-end gap-3 sm:flex-row sm:items-start">
+          {isSuper && dtId && drId ? <SyncTeamFromDtButton teamId={id} /> : null}
+          {isSuper ? (
+            <TerminateTeamButton
+              teamId={id}
+              teamName={team.name}
+              canTerminate={terminationBlockers.canTerminate}
+              blockReason={terminationBlockedMessage}
+            />
+          ) : null}
+        </div>
       </div>
       <section className="space-y-6">
         <h2 className="text-lg font-medium text-zinc-900">Edit team</h2>
@@ -132,8 +139,9 @@ export default async function TeamDetailPage({ params }: { params: Promise<{ id:
           </FormCallout>
           <FormCallout variant="info" title="Region &amp; project">
             They follow the <strong>DT</strong> (or Self DT) employee — update on{" "}
-            <Link href="/employees/region-project-assignments">Employee region &amp; project assignments</Link>. The
-            Driver/Rigger must stay in the same region as the DT when you change members.
+            <Link href="/employees/region-project-assignments">Employee region &amp; project assignments</Link>. Changing the
+            DT&apos;s project there updates this team automatically. Super Users can also use <strong>Sync region &amp; project from DT</strong>{" "}
+            above if the team row is stale. The Driver/Rigger must stay in the same primary region as the DT.
           </FormCallout>
         </div>
         <TeamForm existing={team} employees={employeesWithRoles} unavailableEmployeeIds={unavailableEmployeeIds} />
@@ -187,8 +195,24 @@ export default async function TeamDetailPage({ params }: { params: Promise<{ id:
               <h3 className="mb-2 text-sm font-medium text-zinc-800">Employee Portal credentials</h3>
               <p className="mb-3 text-xs text-zinc-500">
                 Sends the same credential email as on each employee&apos;s page (new temporary password per person). Only
-                current DT and Driver/Rigger on this team receive it.
+                current DT and Driver/Rigger on this team receive it. You can also trigger this from the{" "}
+                <Link href="/teams" className="font-medium text-indigo-700 underline hover:text-indigo-900">
+                  Teams list
+                </Link>{" "}
+                (Actions → Email members). When at least one email is delivered, the team&apos;s “Last team email” timestamp is updated.
               </p>
+              {(team as { last_team_credentials_email_sent_at?: string | null }).last_team_credentials_email_sent_at ? (
+                <p className="mb-3 text-xs text-zinc-600">
+                  Last team bulk send:{" "}
+                  <span className="font-medium text-zinc-800">
+                    {new Date(
+                      String((team as { last_team_credentials_email_sent_at?: string }).last_team_credentials_email_sent_at)
+                    ).toLocaleString()}
+                  </span>
+                </p>
+              ) : (
+                <p className="mb-3 text-xs text-zinc-500">No team bulk credentials email recorded yet.</p>
+              )}
               <SendTeamMemberCredentialsButton teamId={id} memberCount={memberIdsForFleet.length} />
             </div>
           )}
