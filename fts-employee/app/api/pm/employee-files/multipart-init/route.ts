@@ -1,6 +1,4 @@
 import { randomUUID } from "crypto";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getDataClient } from "@/lib/supabase/server";
 import {
   buildEmployeeFileStorageKey,
@@ -14,15 +12,15 @@ import {
   requirePmEmployeeFilesAccess,
 } from "@/lib/pm-files/auth";
 import { getWasabiEmployeeFilesBucket, getWasabiEmployeeFileMaxBytes, getWasabiEmployeeFilesS3Client } from "@/lib/wasabi/s3-client";
+import { multipartPartCount, multipartPartSizeBytesForFile, S3_SINGLE_PUT_MAX_BYTES } from "@/lib/wasabi/s3-multipart-constants";
+import { multipartPartSignExpiresSec, s3AbortMultipartUpload, s3CreateMultipartUpload } from "@/lib/wasabi/s3-multipart-server";
 import { NextResponse } from "next/server";
-
-const PRESIGN_EXPIRES_SEC = 3600;
 
 type Body = {
   regionId?: string;
   employeeId?: string;
   fileName?: string;
-  contentType?: string;
+  contentType?: string | null;
   byteSize?: number | null;
   relativePath?: string | null;
   uploadDate?: string | null;
@@ -53,21 +51,24 @@ export async function POST(req: Request) {
   if (!assertPmRegion(regionId, gate.allowedRegionIds)) return pmRegionForbidden();
 
   const fileName = safeEmployeeFileName(String(body.fileName ?? ""));
-  if (!isAllowedEmployeeFileName(fileName)) {
+  if (!fileName || !isAllowedEmployeeFileName(fileName)) {
+    return NextResponse.json({ message: "Invalid or disallowed file name" }, { status: 400 });
+  }
+
+  const byteSize = typeof body.byteSize === "number" && Number.isFinite(body.byteSize) ? Math.floor(body.byteSize) : null;
+  if (byteSize == null || byteSize <= S3_SINGLE_PUT_MAX_BYTES) {
     return NextResponse.json(
-      {
-        message:
-          "File type not allowed. Use office, data, image, or archive types (e.g. pdf, docx, xlsx, png, jpg, webp, svg, zip, rar).",
-      },
+      { message: `Multipart is only for files larger than ${S3_SINGLE_PUT_MAX_BYTES} bytes` },
       { status: 400 }
     );
   }
-  const contentType = String(body.contentType ?? "application/octet-stream").trim() || "application/octet-stream";
-  const byteSize = typeof body.byteSize === "number" && Number.isFinite(body.byteSize) ? Math.floor(body.byteSize) : null;
+
   const maxB = getWasabiEmployeeFileMaxBytes();
-  if (maxB > 0 && byteSize != null && byteSize > maxB) {
+  if (maxB > 0 && byteSize > maxB) {
     return NextResponse.json({ message: `File exceeds maximum size (${maxB} bytes)` }, { status: 400 });
   }
+
+  const contentType = String(body.contentType ?? "application/octet-stream").trim() || "application/octet-stream";
 
   const relRaw = body.relativePath;
   const relativePath = relRaw != null && String(relRaw).trim() !== "" ? normalizeRelativePathUnderEmployee(String(relRaw)) : null;
@@ -99,14 +100,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "Region storage is not set up for this region yet." }, { status: 400 });
   }
 
-  const fileId = randomUUID();
-  const storageKey = buildEmployeeFileStorageKey(folder.path_segment, emp.full_name ?? null, emp.id, fileId, fileName, {
+  const id = randomUUID();
+  const storageKey = buildEmployeeFileStorageKey(folder.path_segment, emp.full_name ?? null, emp.id, id, fileName, {
     relativePath,
     uploadDate,
   });
 
+  const partSizeBytes = multipartPartSizeBytesForFile(byteSize);
+  const partCount = multipartPartCount(byteSize, partSizeBytes);
+
+  const s3 = getWasabiEmployeeFilesS3Client();
+  const bucket = getWasabiEmployeeFilesBucket();
+
+  let uploadId: string;
+  try {
+    uploadId = await s3CreateMultipartUpload(s3, bucket, storageKey, contentType);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Multipart init failed";
+    return NextResponse.json({ message: msg }, { status: 500 });
+  }
+
   const { error: insErr } = await supabase.from("employee_personal_files").insert({
-    id: fileId,
+    id,
     employee_id: emp.id,
     region_id: regionId,
     folder_id: folder.id,
@@ -114,30 +129,24 @@ export async function POST(req: Request) {
     file_name: fileName,
     mime_type: contentType,
     upload_status: "pending",
+    multipart_upload_id: uploadId,
   });
+
   if (insErr) {
+    try {
+      await s3AbortMultipartUpload(s3, bucket, storageKey, uploadId);
+    } catch {
+      /* best effort */
+    }
     return NextResponse.json({ message: insErr.message }, { status: 400 });
   }
 
-  try {
-    const s3 = getWasabiEmployeeFilesS3Client();
-    const bucket = getWasabiEmployeeFilesBucket();
-    const cmd = new PutObjectCommand({
-      Bucket: bucket,
-      Key: storageKey,
-      ContentType: contentType,
-    });
-    const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: PRESIGN_EXPIRES_SEC });
-    return NextResponse.json({
-      id: fileId,
-      uploadUrl,
-      storageKey,
-      expiresIn: PRESIGN_EXPIRES_SEC,
-      headers: { "Content-Type": contentType },
-    });
-  } catch (e) {
-    await supabase.from("employee_personal_files").delete().eq("id", fileId);
-    const msg = e instanceof Error ? e.message : "Upload URL failed";
-    return NextResponse.json({ message: msg }, { status: 500 });
-  }
+  return NextResponse.json({
+    id,
+    uploadId,
+    storageKey,
+    partSizeBytes,
+    partCount,
+    expiresIn: multipartPartSignExpiresSec(),
+  });
 }

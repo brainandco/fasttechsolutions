@@ -1,27 +1,25 @@
-import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { buildPpReportObjectKey } from "@/lib/pp-reports/storage";
-import { requirePmEmployeeFilesAccess } from "@/lib/pm-files/auth";
 import {
   getWasabiEmployeeFileMaxBytes,
   getWasabiPpReportsBucket,
   getWasabiPpReportsS3Client,
   isPpReportsBucketConfigured,
 } from "@/lib/wasabi/s3-client";
+import { buildPpReportObjectKey } from "@/lib/pp-reports/storage";
+import { requirePmEmployeeFilesAccess } from "@/lib/pm-files/auth";
+import { multipartPartCount, multipartPartSizeBytesForFile, S3_SINGLE_PUT_MAX_BYTES } from "@/lib/wasabi/s3-multipart-constants";
+import { s3CreateMultipartUpload } from "@/lib/wasabi/s3-multipart-server";
 import { NextResponse } from "next/server";
-
-const PRESIGN_EXPIRES_SEC = 3600;
 
 type Body = {
   relativePath?: string | null;
   fileName?: string;
-  contentType?: string;
+  contentType?: string | null;
   byteSize?: number | null;
 };
 
 export async function POST(req: Request) {
-  const gate = await requirePmEmployeeFilesAccess();
-  if (gate instanceof NextResponse) return gate;
+  const auth = await requirePmEmployeeFilesAccess();
+  if (auth instanceof NextResponse) return auth;
 
   if (!isPpReportsBucketConfigured()) {
     return NextResponse.json({ message: "PP reports bucket is not configured." }, { status: 503 });
@@ -40,8 +38,15 @@ export async function POST(req: Request) {
   }
 
   const byteSize = typeof body.byteSize === "number" && Number.isFinite(body.byteSize) ? Math.floor(body.byteSize) : null;
+  if (byteSize == null || byteSize <= S3_SINGLE_PUT_MAX_BYTES) {
+    return NextResponse.json(
+      { message: `Multipart is only for files larger than ${S3_SINGLE_PUT_MAX_BYTES} bytes` },
+      { status: 400 }
+    );
+  }
+
   const maxB = getWasabiEmployeeFileMaxBytes();
-  if (maxB > 0 && byteSize != null && byteSize > maxB) {
+  if (maxB > 0 && byteSize > maxB) {
     return NextResponse.json({ message: `File exceeds maximum size (${maxB} bytes)` }, { status: 400 });
   }
 
@@ -54,23 +59,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: e instanceof Error ? e.message : "Invalid upload" }, { status: 400 });
   }
 
+  const partSizeBytes = multipartPartSizeBytesForFile(byteSize);
+  const partCount = multipartPartCount(byteSize, partSizeBytes);
+
   try {
     const s3 = getWasabiPpReportsS3Client();
     const bucket = getWasabiPpReportsBucket()!;
-    const cmd = new PutObjectCommand({
-      Bucket: bucket,
-      Key: storageKey,
-      ContentType: contentType,
-    });
-    const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: PRESIGN_EXPIRES_SEC });
+    const uploadId = await s3CreateMultipartUpload(s3, bucket, storageKey, contentType);
     return NextResponse.json({
-      uploadUrl,
+      uploadId,
       storageKey,
-      expiresIn: PRESIGN_EXPIRES_SEC,
-      headers: { "Content-Type": contentType },
+      partSizeBytes,
+      partCount,
+      expiresIn: 4 * 3600,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Presign failed";
+    const msg = e instanceof Error ? e.message : "Multipart init failed";
     return NextResponse.json({ message: msg }, { status: 500 });
   }
 }
