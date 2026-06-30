@@ -1,19 +1,18 @@
-import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getDataClient } from "@/lib/supabase/server";
+import { getRequestAuth } from "@/lib/supabase/request-auth";
 import { notifyPmAndQcInRegion } from "@/lib/notifyRegionStaff";
 import { loadPmScopeIds } from "@/lib/pm-team-assignees";
+import { assetCategoryRequiresConditionPhotos } from "@/lib/assets/asset-condition-photos";
 import { hasMinimumPhotos, parseImageUrlArray } from "@/lib/resource-photos";
 import { NextResponse } from "next/server";
 type TransferType = "vehicle_swap" | "vehicle_replacement" | "drive_swap" | "asset_transfer";
 
 const REQUEST_TYPES: TransferType[] = ["vehicle_swap", "vehicle_replacement", "drive_swap", "asset_transfer"];
 
-export async function GET() {
-  const userClient = await createServerSupabaseClient();
-  const {
-    data: { session },
-  } = await userClient.auth.getSession();
-  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+export async function GET(req: Request) {
+  const auth = await getRequestAuth(req);
+  if (!auth) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const session = auth.session;
 
   const supabase = await getDataClient();
   const email = (session.user.email ?? "").trim().toLowerCase();
@@ -70,11 +69,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const userClient = await createServerSupabaseClient();
-  const {
-    data: { session },
-  } = await userClient.auth.getSession();
-  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const auth = await getRequestAuth(req);
+  if (!auth) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const session = auth.session;
 
   const body = await req.json().catch(() => ({}));
   const request_type_input = typeof body.request_type === "string" ? body.request_type : "";
@@ -197,7 +194,15 @@ export async function POST(req: Request) {
     if (!assetIdInput || !targetEmployeeIdInput) {
       return NextResponse.json({ message: "Asset and target DT are required" }, { status: 400 });
     }
-    if (!hasMinimumPhotos(handoverUrls)) {
+    const { data: asset } = await supabase
+      .from("assets")
+      .select("id, assigned_to_employee_id, status, category")
+      .eq("id", assetIdInput)
+      .single();
+    if (!asset || asset.assigned_to_employee_id !== employee.id || asset.status !== "Assigned") {
+      return NextResponse.json({ message: "Selected asset must be assigned to you" }, { status: 400 });
+    }
+    if (assetCategoryRequiresConditionPhotos(asset.category as string | null) && !hasMinimumPhotos(handoverUrls)) {
       return NextResponse.json(
         { message: "At least 2 photos of the asset’s current condition are required for a transfer request." },
         { status: 400 }
@@ -211,15 +216,6 @@ export async function POST(req: Request) {
     const targetOkDt = (targetRoleRowsAt ?? []).some((r) => r.role === "DT" || r.role === "Self DT");
     if (!targetOkDt) return NextResponse.json({ message: "Target employee must be DT or Self DT" }, { status: 400 });
     target_team_id = null;
-
-    const { data: asset } = await supabase
-      .from("assets")
-      .select("id, assigned_to_employee_id, status")
-      .eq("id", assetIdInput)
-      .single();
-    if (!asset || asset.assigned_to_employee_id !== employee.id || asset.status !== "Assigned") {
-      return NextResponse.json({ message: "Selected asset must be assigned to you" }, { status: 400 });
-    }
     target_employee_id = targetEmp.id;
     asset_id = asset.id;
   }

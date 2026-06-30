@@ -1,13 +1,16 @@
-import { createServerSupabaseClient, getDataClient } from "@/lib/supabase/server";
+import { getDataClient } from "@/lib/supabase/server";
+import { getRequestAuth } from "@/lib/supabase/request-auth";
 import { NextResponse } from "next/server";
 import { inclusiveCalendarDays } from "@/lib/employee-requests/leave-metrics";
 import { getEmployeeRolesDisplay, getPortalRolesDisplay } from "@/lib/employee-roles-display";
 import {
   assertAssignedAssetsReturnedIfRequired,
   LEAVE_ASSIGNED_ITEMS_NOT_RETURNED,
+  LEAVE_PENDING_RETURN_CONFIRMATION,
 } from "@/lib/leave/leave-asset-prerequisite";
 import { isAdministratorPortalUser } from "@/lib/leave/portal-admin-leave";
 import { collectSuperUserRecipientUserIds } from "@/lib/notify-super-users";
+import { dispatchNotifications } from "@/lib/notifications/dispatch-notifications";
 
 async function regionAndProjectNames(
   supabase: Awaited<ReturnType<typeof getDataClient>>,
@@ -32,14 +35,13 @@ async function regionAndProjectNames(
 /**
  * POST /api/leave — submit a leave request (creates an approval with type leave_request).
  * No guarantor. Portal Administrator/Super User (auth) uses Super-only admin leave payload.
- * Other employees: assigned assets/SIMs must be returned before leave unless it is a single-day Sick or Casual request.
+ * Other employees: assigned assets/SIMs/vehicles must be returned and confirmed by PM before leave
+ * unless it is a single-day Sick, Casual, or Emergency request.
  */
 export async function POST(req: Request) {
-  const userClient = await createServerSupabaseClient();
-  const {
-    data: { session },
-  } = await userClient.auth.getSession();
-  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const auth = await getRequestAuth(req);
+  if (!auth) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const session = auth.session;
 
   const body = await req.json().catch(() => ({}));
   const from_date = typeof body.from_date === "string" ? body.from_date.trim() : "";
@@ -97,6 +99,17 @@ export async function POST(req: Request) {
             message: assetOk.message,
             asset_count: assetOk.assetCount,
             sim_count: assetOk.simCount,
+            vehicle_count: assetOk.vehicleCount,
+          },
+          { status: 400 }
+        );
+      }
+      if ("code" in assetOk && assetOk.code === LEAVE_PENDING_RETURN_CONFIRMATION) {
+        return NextResponse.json(
+          {
+            code: assetOk.code,
+            message: assetOk.message,
+            pending_return_count: assetOk.pendingReturnCount,
           },
           { status: 400 }
         );
@@ -232,7 +245,7 @@ export async function POST(req: Request) {
   }
 
   if (rows.length > 0) {
-    await supabase.from("notifications").insert(rows);
+    await dispatchNotifications(supabase, rows);
   }
 
   return NextResponse.json({ id: approval.id, message: "Leave request submitted" });

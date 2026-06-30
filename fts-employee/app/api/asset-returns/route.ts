@@ -1,8 +1,11 @@
-import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getDataClient } from "@/lib/supabase/server";
+import { getRequestAuth } from "@/lib/supabase/request-auth";
 import { canEmployeeInitiateAssetReturn } from "@/lib/asset-return-eligibility";
+import { assetCategoryRequiresConditionPhotos } from "@/lib/assets/asset-condition-photos";
 import { NextResponse } from "next/server";
 import { notifyPmAndQcInRegion } from "@/lib/notifyRegionStaff";
+import { notifyAssetReturnAdmins } from "@/lib/notify-asset-return-admins";
+import { employeeHasPmRole } from "@/lib/employees/pm-role";
 import { deleteReceiptForResource } from "@/lib/resource-receipts";
 import { hasMinimumPhotos, parseImageUrlArray } from "@/lib/resource-photos";
 
@@ -12,9 +15,9 @@ import { hasMinimumPhotos, parseImageUrlArray } from "@/lib/resource-photos";
  * Creates asset_return_requests (pending) and sets asset to Pending_Return, unassigned.
  */
 export async function POST(req: Request) {
-  const userClient = await createServerSupabaseClient();
-  const { data: { session } } = await userClient.auth.getSession();
-  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const auth = await getRequestAuth(req);
+  if (!auth) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const session = auth.session;
 
   const body = await req.json().catch(() => ({}));
   const assetId = typeof body.asset_id === "string" ? body.asset_id.trim() : "";
@@ -22,9 +25,6 @@ export async function POST(req: Request) {
   const returnUrls = parseImageUrlArray(body.return_image_urls);
   if (!assetId) return NextResponse.json({ message: "asset_id required" }, { status: 400 });
   if (!employee_comment) return NextResponse.json({ message: "employee_comment is required" }, { status: 400 });
-  if (!hasMinimumPhotos(returnUrls)) {
-    return NextResponse.json({ message: "At least 2 condition photos are required when returning an asset." }, { status: 400 });
-  }
 
   const supabase = await getDataClient();
   const email = (session.user.email ?? "").trim().toLowerCase();
@@ -33,7 +33,7 @@ export async function POST(req: Request) {
 
   const { data: asset, error: aErr } = await supabase
     .from("assets")
-    .select("id, assigned_to_employee_id, status, assigned_region_id")
+    .select("id, assigned_to_employee_id, status, assigned_region_id, category")
     .eq("id", assetId)
     .single();
 
@@ -49,6 +49,9 @@ export async function POST(req: Request) {
       },
       { status: 400 }
     );
+  }
+  if (!hasMinimumPhotos(returnUrls) && assetCategoryRequiresConditionPhotos(asset.category as string | null)) {
+    return NextResponse.json({ message: "At least 2 condition photos are required when returning an asset." }, { status: 400 });
   }
 
   const { data: existingPending } = await supabase
@@ -89,18 +92,28 @@ export async function POST(req: Request) {
   await deleteReceiptForResource(supabase, "asset", assetId);
 
   if (region_id && employee.project_id) {
-    await notifyPmAndQcInRegion(
-      supabase,
-      region_id,
-      {
-        title: "Asset return pending review",
-        body: "An employee has returned an asset. Please review in Asset return queue (PM) and confirm handover with QC as needed.",
-        category: "asset_return",
-        link: "/dashboard/asset-returns",
-        meta: { asset_id: assetId, from_employee_id: employee.id },
-      },
-      { projectId: employee.project_id }
-    );
+    const returnerIsPm = await employeeHasPmRole(supabase, employee.id);
+    if (returnerIsPm) {
+      await notifyAssetReturnAdmins(supabase, {
+        title: "PM asset return pending admin review",
+        body: "A Project Manager has returned an asset. Confirm the return in the Admin Portal asset return queue.",
+        link: "/assets/returns",
+        meta: { asset_id: assetId, from_employee_id: employee.id, pm_return: true },
+      });
+    } else {
+      await notifyPmAndQcInRegion(
+        supabase,
+        region_id,
+        {
+          title: "Asset return pending review",
+          body: "An employee has returned an asset. Please review in Asset return queue (PM) and confirm handover with QC as needed.",
+          category: "asset_return",
+          link: "/dashboard/asset-returns",
+          meta: { asset_id: assetId, from_employee_id: employee.id },
+        },
+        { projectId: employee.project_id }
+      );
+    }
   }
 
   return NextResponse.json({ ok: true });

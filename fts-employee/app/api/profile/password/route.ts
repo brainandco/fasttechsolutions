@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseAdmin } from "@/lib/supabase/admin";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { changePasswordForUser } from "@/lib/auth/change-password-server";
+import { getRequestAuth } from "@/lib/supabase/request-auth";
 
+/** POST — change password (web: cookie session; mobile: Bearer). */
 export async function POST(request: NextRequest) {
-  const supabase = await createServerSupabaseClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user?.email) {
+  const auth = await getRequestAuth(request);
+  if (!auth?.user?.email?.trim()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -18,8 +16,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const current_password =
-    typeof body.current_password === "string" ? body.current_password : "";
+  const current_password = typeof body.current_password === "string" ? body.current_password : "";
   const new_password = typeof body.new_password === "string" ? body.new_password : "";
 
   if (current_password.length < 1 || new_password.length < 8) {
@@ -29,30 +26,15 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { error: signErr } = await supabase.auth.signInWithPassword({
-    email: session.user.email,
-    password: current_password,
-  });
-  if (signErr) {
-    return NextResponse.json({ error: "Current password is incorrect." }, { status: 400 });
-  }
+  const result = await changePasswordForUser(
+    auth.user.id,
+    auth.user.email.trim(),
+    current_password,
+    new_password
+  );
 
-  const { error: updErr } = await supabase.auth.updateUser({ password: new_password });
-  if (updErr) {
-    return NextResponse.json({ error: updErr.message }, { status: 400 });
-  }
-
-  try {
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const admin = createServerSupabaseAdmin();
-      await admin.from("users_profile").update({ must_change_password: false }).eq("id", session.user.id);
-      const em = session.user.email?.trim().toLowerCase();
-      if (em) {
-        await admin.from("employees").update({ must_change_password: false }).eq("email", em);
-      }
-    }
-  } catch {
-    /* non-fatal */
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error }, { status: result.status });
   }
 
   return NextResponse.json({ ok: true });

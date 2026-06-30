@@ -4,6 +4,8 @@ import { getOptionalAdminPortalUrl } from "@/lib/auth/portal-access";
 import Link from "next/link";
 import { canAccessPpTeamLeaveRequests, hasReportingPortalRole } from "@/lib/pp/auth";
 import { loadPmScopeIds } from "@/lib/pm-team-assignees";
+import { loadPmProjectTypeAssetOverview, type PmProjectTypeAssetOverview } from "@/lib/pm/pm-project-type-asset-stats";
+import { PmProjectTypeAssetCards } from "@/components/pm/PmProjectTypeAssetCards";
 import { AssignedAssetsList } from "@/components/assets/AssignedAssetsList";
 import { ReturnVehicleButton } from "@/components/returns/ReturnVehicleButton";
 import { ReturnSimButton } from "@/components/returns/ReturnSimButton";
@@ -105,6 +107,7 @@ export default async function DashboardPage() {
   let pmRegionEmployeeCount = 0;
   let pmRegionAssignedAssetCount = 0;
   let pmRegionScopeLabel = "";
+  let pmProjectTypeAssets: PmProjectTypeAssetOverview | null = null;
 
   if (isPm) {
     const { allowedRegionIds } = await loadPmScopeIds(
@@ -113,6 +116,13 @@ export default async function DashboardPage() {
       session.user.id
     );
 
+    pmProjectTypeAssets = await loadPmProjectTypeAssetOverview(
+      supabase,
+      { id: employee.id, region_id: employee.region_id, project_id: employee.project_id },
+      session.user.id
+    );
+    pmRegionAssignedAssetCount = pmProjectTypeAssets.grandTotal;
+
     if (allowedRegionIds.length > 0) {
       const { count: empCount } = await supabase
         .from("employees")
@@ -120,22 +130,6 @@ export default async function DashboardPage() {
         .in("region_id", allowedRegionIds)
         .eq("status", "ACTIVE");
       pmRegionEmployeeCount = empCount ?? 0;
-
-      const { data: regionEmps } = await supabase
-        .from("employees")
-        .select("id")
-        .in("region_id", allowedRegionIds)
-        .eq("status", "ACTIVE");
-      const regionEmpIds = (regionEmps ?? []).map((e) => e.id as string);
-
-      if (regionEmpIds.length > 0) {
-        const { count: assetCount } = await supabase
-          .from("assets")
-          .select("id", { count: "exact", head: true })
-          .in("assigned_to_employee_id", regionEmpIds)
-          .in("status", ["Assigned", "With_QC", "Under_Maintenance", "Damaged"]);
-        pmRegionAssignedAssetCount = assetCount ?? 0;
-      }
 
       const { data: regionRows } = await supabase.from("regions").select("name").in("id", allowedRegionIds).order("name");
       const names = (regionRows ?? []).map((r) => r.name as string).filter(Boolean);
@@ -240,11 +234,27 @@ export default async function DashboardPage() {
               <p className="mt-1 text-xs text-zinc-500">Active employees</p>
             </div>
             <div className="rounded-xl border border-violet-200 bg-white/90 p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-violet-700">Assets assigned in region</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-violet-700">Assets in region</p>
               <p className="mt-1 text-3xl font-semibold text-zinc-900">{pmRegionAssignedAssetCount}</p>
-              <p className="mt-1 text-xs text-zinc-500">Tools held by regional employees</p>
+              {pmProjectTypeAssets && pmProjectTypeAssets.grandTotal > 0 ? (
+                <p className="mt-1 text-xs text-zinc-500">
+                  All assigners ·{" "}
+                  <span className="font-medium text-emerald-700">{pmProjectTypeAssets.grandConfirmed} confirmed</span>
+                  {" · "}
+                  <span className="font-medium text-amber-700">{pmProjectTypeAssets.grandPending} pending</span>
+                  {pmProjectTypeAssets.yourAssignedCount > 0 ? (
+                    <>
+                      {" "}
+                      · <span className="font-medium text-indigo-800">{pmProjectTypeAssets.yourAssignedCount} by you</span>
+                    </>
+                  ) : null}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-zinc-500">Assigned to employees in your region (any assigner)</p>
+              )}
             </div>
           </div>
+          {pmProjectTypeAssets ? <PmProjectTypeAssetCards overview={pmProjectTypeAssets} /> : null}
         </section>
       )}
 

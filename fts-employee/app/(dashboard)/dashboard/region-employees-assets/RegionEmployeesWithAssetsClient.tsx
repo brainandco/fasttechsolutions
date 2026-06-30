@@ -9,6 +9,17 @@ export type AssetLine = {
   serial: string | null;
   category: string | null;
   status: string | null;
+  receiptStatus: "pending" | "confirmed" | null;
+};
+
+export type SimLine = {
+  id: string;
+  sim_number: string | null;
+  phone_number: string | null;
+  operator: string | null;
+  service_type: string | null;
+  status: string | null;
+  receiptStatus: "pending" | "confirmed" | null;
 };
 
 export type EmployeeWithAssets = {
@@ -17,6 +28,7 @@ export type EmployeeWithAssets = {
   email: string | null;
   roles: string[];
   assets: AssetLine[];
+  sims: SimLine[];
 };
 
 function statusStyles(status: string | null): string {
@@ -40,7 +52,29 @@ function modelDisplay(model: string | null | undefined): string {
   return m.length > 0 ? m : "N/A";
 }
 
+function receiptBadge(status: AssetLine["receiptStatus"]): { label: string; className: string } | null {
+  if (status === "confirmed") {
+    return {
+      label: "Receipt confirmed",
+      className: "bg-emerald-100 text-emerald-900 ring-emerald-200/80",
+    };
+  }
+  if (status === "pending") {
+    return {
+      label: "Receipt pending",
+      className: "bg-amber-100 text-amber-900 ring-amber-200/80",
+    };
+  }
+  return null;
+}
+
 function haystack(emp: EmployeeWithAssets, a: AssetLine): string {
+  const receiptLabel =
+    a.receiptStatus === "confirmed"
+      ? "receipt confirmed"
+      : a.receiptStatus === "pending"
+        ? "receipt pending"
+        : "";
   return [
     emp.full_name,
     emp.email ?? "",
@@ -50,9 +84,37 @@ function haystack(emp: EmployeeWithAssets, a: AssetLine): string {
     a.serial,
     a.category,
     a.status,
+    receiptLabel,
   ]
     .join(" ")
     .toLowerCase();
+}
+
+function simHaystack(emp: EmployeeWithAssets, s: SimLine): string {
+  const receiptLabel =
+    s.receiptStatus === "confirmed"
+      ? "receipt confirmed"
+      : s.receiptStatus === "pending"
+        ? "receipt pending"
+        : "";
+  return [
+    emp.full_name,
+    emp.email ?? "",
+    ...emp.roles,
+    s.sim_number,
+    s.phone_number,
+    s.operator,
+    s.service_type,
+    s.status,
+    "sim",
+    receiptLabel,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function simLabel(s: SimLine): string {
+  return [s.sim_number, s.phone_number, s.operator, s.service_type].filter(Boolean).join(" · ") || "SIM";
 }
 
 export function RegionEmployeesWithAssetsClient({
@@ -77,19 +139,42 @@ export function RegionEmployeesWithAssetsClient({
       ) {
         return true;
       }
-      return emp.assets.some((a) => haystack(emp, a).includes(needle));
+      return emp.assets.some((a) => haystack(emp, a).includes(needle)) || emp.sims.some((s) => simHaystack(emp, s).includes(needle));
     });
   }, [employees, q]);
 
   const totalTools = useMemo(() => employees.reduce((n, e) => n + e.assets.length, 0), [employees]);
+  const totalSims = useMemo(() => employees.reduce((n, e) => n + e.sims.length, 0), [employees]);
+  const pendingReceipts = useMemo(
+    () =>
+      employees.reduce(
+        (n, e) =>
+          n +
+          e.assets.filter((a) => a.receiptStatus === "pending").length +
+          e.sims.filter((s) => s.receiptStatus === "pending").length,
+        0
+      ),
+    [employees]
+  );
+  const confirmedReceipts = useMemo(
+    () =>
+      employees.reduce(
+        (n, e) =>
+          n +
+          e.assets.filter((a) => a.receiptStatus === "confirmed").length +
+          e.sims.filter((s) => s.receiptStatus === "confirmed").length,
+        0
+      ),
+    [employees]
+  );
 
   if (employees.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-200 bg-gradient-to-br from-zinc-50 to-white p-10 text-center shadow-inner">
         <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-100 text-2xl">📦</div>
-        <p className="text-base font-semibold text-zinc-800">No assigned tools in this view</p>
+        <p className="text-base font-semibold text-zinc-800">No assigned tools or SIMs in this view</p>
         <p className="mx-auto mt-2 max-w-md text-sm text-zinc-600">
-          When assets are assigned to employees in {regionLabel}, they will appear here.
+          When assets or SIMs are assigned to employees in {regionLabel}, they will appear here.
         </p>
       </div>
     );
@@ -104,9 +189,21 @@ export function RegionEmployeesWithAssetsClient({
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-white/70">Overview</p>
             <p className="mt-1 text-3xl font-bold tracking-tight">{employees.length}</p>
-            <p className="text-sm text-white/85">employees holding tools</p>
+            <p className="text-sm text-white/85">employees with assets or SIMs</p>
             <p className="mt-2 text-sm text-white/75">
-              <span className="font-semibold text-white">{totalTools}</span> assignments · Region: {regionLabel}
+              <span className="font-semibold text-white">{totalTools}</span> asset{totalTools === 1 ? "" : "s"}
+              {totalSims > 0 ? (
+                <>
+                  {" "}
+                  · <span className="font-semibold text-white">{totalSims}</span> SIM{totalSims === 1 ? "" : "s"}
+                </>
+              ) : null}{" "}
+              · Region: {regionLabel}
+              {pendingReceipts > 0 || confirmedReceipts > 0 ? (
+                <span className="mt-1 block text-xs text-white/70">
+                  Receipts: {confirmedReceipts} confirmed · {pendingReceipts} pending
+                </span>
+              ) : null}
               {withoutCount > 0 ? (
                 <span className="mt-1 block text-xs text-white/70">
                   {withoutCount} other active employee{withoutCount === 1 ? "" : "s"} in region with no tools
@@ -187,39 +284,96 @@ export function RegionEmployeesWithAssetsClient({
                         </div>
                       ) : null}
                     </div>
-                    <span className="shrink-0 rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-900 ring-1 ring-emerald-200/80">
-                      {emp.assets.length} tool{emp.assets.length === 1 ? "" : "s"}
-                    </span>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      {emp.assets.length > 0 ? (
+                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-900 ring-1 ring-emerald-200/80">
+                          {emp.assets.length} asset{emp.assets.length === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
+                      {emp.sims.length > 0 ? (
+                        <span className="rounded-full bg-fuchsia-100 px-3 py-1 text-xs font-bold text-fuchsia-900 ring-1 ring-fuchsia-200/80">
+                          {emp.sims.length} SIM{emp.sims.length === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                  <ul className="mt-4 space-y-2">
-                    {emp.assets.map((a) => (
-                      <li
-                        key={a.id}
-                        className={`rounded-xl border border-zinc-100 border-l-4 py-2.5 pl-3 pr-3 text-sm ${statusStyles(a.status)}`}
-                      >
-                        <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
-                          <span className="font-semibold text-zinc-900">{a.name?.trim() || a.category || "Asset"}</span>
-                          {a.status ? (
-                            <span className="rounded-md bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                              {(a.status ?? "").replace(/_/g, " ")}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="mt-1 text-xs text-zinc-600">
-                          <span className="font-medium text-zinc-800">Model:</span> {modelDisplay(a.model)}
-                          {a.category ? (
-                            <>
-                              {" "}
-                              · <span className="text-zinc-500">{a.category}</span>
-                            </>
-                          ) : null}
-                          {a.serial ? (
-                            <span className="ml-1 font-mono text-[11px] text-zinc-400">· {a.serial}</span>
-                          ) : null}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
+                  {emp.assets.length > 0 ? (
+                    <ul className="mt-4 space-y-2">
+                      {emp.assets.map((a) => (
+                        <li
+                          key={a.id}
+                          className={`rounded-xl border border-zinc-100 border-l-4 py-2.5 pl-3 pr-3 text-sm ${statusStyles(a.status)}`}
+                        >
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+                            <span className="font-semibold text-zinc-900">{a.name?.trim() || a.category || "Asset"}</span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {(() => {
+                                const badge = receiptBadge(a.receiptStatus);
+                                return badge ? (
+                                  <span
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${badge.className}`}
+                                  >
+                                    {badge.label}
+                                  </span>
+                                ) : null;
+                              })()}
+                              {a.status ? (
+                                <span className="rounded-md bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                  {(a.status ?? "").replace(/_/g, " ")}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <p className="mt-1 text-xs text-zinc-600">
+                            <span className="font-medium text-zinc-800">Model:</span> {modelDisplay(a.model)}
+                            {a.category ? (
+                              <>
+                                {" "}
+                                · <span className="text-zinc-500">{a.category}</span>
+                              </>
+                            ) : null}
+                            {a.serial ? (
+                              <span className="ml-1 font-mono text-[11px] text-zinc-400">· {a.serial}</span>
+                            ) : null}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {emp.sims.length > 0 ? (
+                    <div className={emp.assets.length > 0 ? "mt-5 border-t border-zinc-200 pt-4" : "mt-4"}>
+                      <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-fuchsia-700">SIM cards</p>
+                      <ul className="space-y-2">
+                        {emp.sims.map((s) => (
+                          <li
+                            key={s.id}
+                            className="rounded-xl border border-fuchsia-100 border-l-4 border-l-fuchsia-500 bg-fuchsia-50/40 py-2.5 pl-3 pr-3 text-sm"
+                          >
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+                              <span className="font-semibold text-zinc-900">{simLabel(s)}</span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {(() => {
+                                  const badge = receiptBadge(s.receiptStatus);
+                                  return badge ? (
+                                    <span
+                                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${badge.className}`}
+                                    >
+                                      {badge.label}
+                                    </span>
+                                  ) : null;
+                                })()}
+                                {s.status ? (
+                                  <span className="rounded-md bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                    {(s.status ?? "").replace(/_/g, " ")}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </li>
