@@ -1,0 +1,2 @@
+Remove-Item Env:EXPO_APPLE_APP_SPECIFIC_PASSWORD -ErrorAction SilentlyContinue
+npx eas-cli submit -p ios --profile production --latest

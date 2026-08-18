@@ -1,0 +1,5 @@
+
+$env:EXPO_ASC_API_KEY_PATH = "D:\Fast Technology Solutions Portal\admin\fts-mobile\fts-mobile\secrets\AuthKey_CVPRV8NRSJ.p8"
+$env:EXPO_ASC_KEY_ID = "CVPRV8NRSJ"
+$env:EXPO_ASC_ISSUER_ID = "907b675d-e975-4845-b38a-61d3735d11fc"
+npx eas-cli build -p ios --profile production
