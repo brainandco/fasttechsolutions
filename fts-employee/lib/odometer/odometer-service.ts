@@ -50,15 +50,33 @@ export type ConfirmOdometerInput = {
   ocrOdometerRaw: string | null;
   ocrStatus: "ok" | "failed" | "skipped_quota";
   ocrUnitsUsed: number;
+  activityNotes: string;
 };
 
 function parseUrlList(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
-  return input.filter((u): u is string => typeof u === "string" && u.startsWith("http")).slice(0, 8);
+  return input.filter((u): u is string => typeof u === "string" && u.startsWith("http")).slice(0, 1);
 }
 
 export function normalizeOdometerPhotoUrls(input: unknown): string[] {
   return parseUrlList(input);
+}
+
+export const ACTIVITY_NOTES_MIN = 8;
+export const ACTIVITY_NOTES_MAX = 500;
+
+export function normalizeActivityNotes(raw: unknown): { ok: true; value: string } | { ok: false; error: string } {
+  const s = typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
+  if (s.length < ACTIVITY_NOTES_MIN) {
+    return {
+      ok: false,
+      error: `Write the activity you went for (at least ${ACTIVITY_NOTES_MIN} characters).`,
+    };
+  }
+  if (s.length > ACTIVITY_NOTES_MAX) {
+    return { ok: false, error: `Activity notes must be ${ACTIVITY_NOTES_MAX} characters or less.` };
+  }
+  return { ok: true, value: s };
 }
 
 export async function loadAssigneeContext(supabase: SupabaseClient, employeeId: string, vehicleId: string) {
@@ -142,7 +160,7 @@ export async function analyzeOdometerPhotos(
   }
   const odoUrls = normalizeOdometerPhotoUrls(input.odometerPhotoUrls);
   if (odoUrls.length < 1) {
-    return { error: "At least one odometer photo is required", status: 400 };
+    return { error: "One odometer photo is required", status: 400 };
   }
 
   const ctx = await loadAssigneeContext(supabase, employeeId, input.vehicleId);
@@ -178,7 +196,21 @@ export async function analyzeOdometerPhotos(
   }
 
   const plateParsed = parsePlateCandidates(plateRaw, okCtx.vehicle.plate_number);
-  const odoParsed = parseOdometerCandidates(odoRaw, okCtx.vehicle.mileage);
+
+  const admin = createServerSupabaseAdmin();
+  const { data: openDuty } = await admin
+    .from("vehicle_duty_shifts")
+    .select("start_km")
+    .eq("vehicle_id", input.vehicleId)
+    .eq("employee_id", employeeId)
+    .eq("status", "open")
+    .maybeSingle();
+  const odometerAnchor =
+    openDuty?.start_km != null && Number(openDuty.start_km) > 0
+      ? Number(openDuty.start_km)
+      : okCtx.vehicle.mileage;
+
+  const odoParsed = parseOdometerCandidates(odoRaw, odometerAnchor);
   const suggestedPlate = plateParsed.best || okCtx.vehicle.plate_number || null;
 
   const qAfter = await getOcrUsageThisMonth();
@@ -224,7 +256,7 @@ export async function confirmOdometerReading(
   }
   const odoUrls = normalizeOdometerPhotoUrls(input.odometerPhotoUrls);
   if (odoUrls.length < 1) {
-    return { error: "At least one odometer photo is required", status: 400 };
+    return { error: "One odometer photo is required", status: 400 };
   }
   const plateFinal = input.plateNumberFinal.trim();
   if (!plateFinal) return { error: "plate_number_final is required", status: 400 };
@@ -238,6 +270,8 @@ export async function confirmOdometerReading(
   if (input.lat == null || input.lng == null || !Number.isFinite(input.lat) || !Number.isFinite(input.lng)) {
     return { error: "GPS is required to start or end duty", status: 400 };
   }
+  const notes = normalizeActivityNotes(input.activityNotes);
+  if (!notes.ok) return { error: notes.error, status: 400 };
 
   const ctx = await loadAssigneeContext(supabase, employeeId, input.vehicleId);
   if ("error" in ctx && ctx.error) return { error: ctx.error, status: ctx.status };
@@ -309,6 +343,7 @@ export async function confirmOdometerReading(
       lng: input.lng,
       accuracy_m: input.accuracyM,
       location_label: locationLabel,
+      activity_notes: notes.value,
       plate_photo_url: input.platePhotoUrl,
       odometer_photo_urls: odoUrls,
       ocr_plate_raw: input.ocrPlateRaw,
@@ -372,6 +407,7 @@ export async function confirmOdometerReading(
     lng: input.lng,
     accuracy_m: input.accuracyM,
     location_label: locationLabel,
+    activity_notes: notes.value,
     plate_photo_url: input.platePhotoUrl,
     odometer_photo_urls: odoUrls,
     ocr_plate_raw: input.ocrPlateRaw,
